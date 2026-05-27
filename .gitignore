@@ -1,0 +1,38 @@
+# Private WeChat data and generated artifacts
+wechat_decrypted/
+wechat_exports_txt*/
+wechat_emotions_export/
+distill_training_data/
+runs/
+model/
+base_models/
+server_backups/
+
+# Downloaded third-party tools and caches
+.cache/
+WeChatMsg/
+WeChatMsg-gitee/
+tmp_llama_cpp/
+tools/llama.cpp/
+
+# Frontend build/dependencies and private sticker assets
+web-chat/node_modules/
+web-chat/.next/
+web-chat/tsconfig.tsbuildinfo
+web-chat/public/stickers/
+web-chat/app/sticker-map.json
+!web-chat/public/stickers/
+!web-chat/public/stickers/.gitkeep
+!web-chat/app/sticker-map.json
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Archives and local packaging
+*.zip
+*.tar.gz
+*.gguf
+*.safetensors
