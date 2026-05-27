@@ -1,0 +1,19 @@
+[project]
+name = "me-distilled-cli"
+version = "0.1.0"
+description = "Local CLI pipeline for building a personal WeChat style LoRA model."
+requires-python = ">=3.10"
+dependencies = [
+  "rich==13.9.4",
+  "requests==2.32.3",
+  "tqdm==4.67.1",
+  "modelscope==1.22.3",
+  "huggingface-hub==0.27.1",
+]
+
+[project.scripts]
+me-distilled = "me_distilled.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["me_distilled*"]
