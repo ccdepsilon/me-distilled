@@ -25,6 +25,7 @@ TOOLS_CACHE = CACHE_DIR / "tools"
 MODEL_CACHE = CACHE_DIR / "models"
 
 WECHATMSG_URLS = [
+    "https://gitee.com/lc044/WeChatMsg.git",
     "https://github.com/LC044/WeChatMsg.git",
     "https://ghfast.top/github.com/LC044/WeChatMsg.git",
 ]
@@ -239,6 +240,10 @@ def module_exists(name: str) -> bool:
     return importlib.util.find_spec(name) is not None
 
 
+def is_windows() -> bool:
+    return sys.platform.startswith("win")
+
+
 def install_requirements(path: Path) -> None:
     if not path.exists():
         out(f"未找到依赖文件: {path}", "red")
@@ -377,11 +382,68 @@ def match_contacts(decrypted: Path, targets: list[str], include_groups: bool = F
     return result
 
 
+def windows_documents_dir() -> Path:
+    if not is_windows():
+        return Path.home() / "Documents"
+    try:
+        import winreg
+
+        key = winreg.OpenKey(
+            winreg.HKEY_CURRENT_USER,
+            r"Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders",
+        )
+        value, _ = winreg.QueryValueEx(key, "Personal")
+        winreg.CloseKey(key)
+        return Path(os.path.expandvars(str(value))).expanduser()
+    except Exception:
+        return Path.home() / "Documents"
+
+
+def wechat_storage_roots() -> list[Path]:
+    roots: list[Path] = []
+    if is_windows():
+        try:
+            import winreg
+
+            key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Tencent\WeChat", 0, winreg.KEY_READ)
+            value, _ = winreg.QueryValueEx(key, "FileSavePath")
+            winreg.CloseKey(key)
+            if value and str(value) != "MyDocument:":
+                roots.append(Path(os.path.expandvars(str(value))).expanduser())
+        except Exception:
+            pass
+        config = (
+            Path(os.environ.get("APPDATA", Path.home() / "AppData" / "Roaming"))
+            / "Tencent"
+            / "WeChat"
+            / "All Users"
+            / "config"
+            / "3ebffe94.ini"
+        )
+        if config.exists():
+            text = config.read_text(encoding="utf-8", errors="ignore").strip()
+            if text and text != "MyDocument:":
+                roots.append(Path(os.path.expandvars(text)).expanduser())
+    roots.extend([windows_documents_dir(), Path.home() / "Documents"])
+
+    candidates: list[Path] = []
+    for root in roots:
+        for name in ["WeChat Files", "Weixin Files"]:
+            path = root / name
+            if path.exists():
+                candidates.append(path)
+    unique: list[Path] = []
+    seen: set[str] = set()
+    for path in candidates:
+        key = str(path.resolve())
+        if key not in seen:
+            seen.add(key)
+            unique.append(path)
+    return unique
+
+
 def find_wechat_files() -> list[Path]:
-    roots = [
-        Path.home() / "Documents" / "WeChat Files",
-        Path.home() / "Documents" / "Weixin Files",
-    ]
+    roots = wechat_storage_roots()
     candidates: list[Path] = []
     for root in roots:
         if not root.exists():
@@ -439,6 +501,11 @@ def print_wechat_scan() -> tuple[list[dict[str, Any]], list[Path]]:
     accounts = scan_wechat_accounts()
     decrypted_dirs = find_decrypted_dirs()
     heading("微信目录扫描")
+    roots = wechat_storage_roots()
+    if roots:
+        out("检测到的微信存储根目录：", "bold")
+        for root in roots:
+            out(f"  - {root}")
     if console and Table:
         table = Table(title="微信账号目录", show_header=True, header_style="bold")
         table.add_column("#")
@@ -474,10 +541,69 @@ def print_wechat_scan() -> tuple[list[dict[str, Any]], list[Path]]:
             info = check_db(path)
             print(f"{idx}. msg_dbs={len(info['msg_dbs'])} emotion={info['emotion']} {path}")
     if not accounts:
-        out("没有在默认文档目录发现微信账号目录。可稍后用 --wechat-files 手动指定。", "yellow")
+        out("没有发现微信账号目录。可稍后用 --wechat-files 手动指定。", "yellow")
     if not decrypted_dirs:
-        out("没有发现可用的已解密数据库目录。需要先运行 wechat decrypt 并在 WeChatMsg 中导出。", "yellow")
+        out("没有发现可用的已解密数据库目录。可以先运行 wechat auto-decrypt，失败后再用 wechat decrypt 图形兜底。", "yellow")
     return accounts, decrypted_dirs
+
+
+def wechat_processes() -> list[dict[str, Any]]:
+    try:
+        import psutil
+    except Exception:
+        return []
+    rows: list[dict[str, Any]] = []
+    for process in psutil.process_iter(["name", "exe", "pid"]):
+        try:
+            if process.info.get("name") == "WeChat.exe":
+                rows.append({"pid": process.info.get("pid"), "exe": process.info.get("exe") or ""})
+        except Exception:
+            continue
+    return rows
+
+
+def find_wechat_exe() -> Path | None:
+    if not is_windows():
+        return None
+    candidates: list[Path] = []
+    try:
+        import winreg
+
+        for hive in [winreg.HKEY_CURRENT_USER, winreg.HKEY_LOCAL_MACHINE]:
+            try:
+                key = winreg.OpenKey(hive, r"Software\Microsoft\Windows\CurrentVersion\App Paths\WeChat.exe")
+                value, _ = winreg.QueryValueEx(key, "")
+                winreg.CloseKey(key)
+                candidates.append(Path(value))
+            except Exception:
+                pass
+    except Exception:
+        pass
+    candidates.extend(
+        [
+            Path(os.environ.get("ProgramFiles", "C:/Program Files")) / "Tencent" / "WeChat" / "WeChat.exe",
+            Path(os.environ.get("ProgramFiles(x86)", "C:/Program Files (x86)")) / "Tencent" / "WeChat" / "WeChat.exe",
+        ]
+    )
+    for path in candidates:
+        if path.exists():
+            return path
+    return None
+
+
+def open_wechat_if_possible() -> bool:
+    if wechat_processes():
+        return True
+    exe = find_wechat_exe()
+    if not exe:
+        return False
+    try:
+        os.startfile(str(exe))  # type: ignore[attr-defined]
+        out(f"已尝试打开微信: {exe}", "green")
+        return True
+    except Exception as exc:
+        out(f"尝试打开微信失败: {exc}", "yellow")
+        return False
 
 
 def choose_path_from_candidates(
@@ -548,9 +674,49 @@ def env_for_run(
     }
 
 
-def ensure_wechatmsg() -> Path:
-    return clone_with_fallback(WECHATMSG_URLS, TOOLS_CACHE / "WeChatMsg", "WeChatMsg")
+def is_valid_wechatmsg_tool(path: Path) -> bool:
+    return (
+        (path / "main.py").exists()
+        and (path / "requirements.txt").exists()
+        and (path / "app" / "decrypt" / "decrypt.py").exists()
+        and (path / "app" / "decrypt" / "get_wx_info.py").exists()
+        and (path / "app" / "resources" / "data" / "version_list.json").exists()
+    )
 
+
+def ensure_wechatmsg() -> Path:
+    target = TOOLS_CACHE / "WeChatMsg"
+    if is_valid_wechatmsg_tool(target):
+        out(f"已发现可用 WeChatMsg: {target}", "green")
+        return target
+    if target.exists():
+        shutil.rmtree(target, ignore_errors=True)
+
+    if not command_exists("git"):
+        for local in (ROOT / "WeChatMsg-gitee", ROOT / "WeChatMsg"):
+            if is_valid_wechatmsg_tool(local):
+                out(f"未找到 git，复用本地 WeChatMsg: {local}", "green")
+                return local
+        out("未找到 git。请先安装 Git，或手动下载 WeChatMsg 后用 --tool 指定目录。", "red")
+        raise SystemExit(1)
+
+    target.parent.mkdir(parents=True, exist_ok=True)
+    last_error = 0
+    for url in WECHATMSG_URLS:
+        proc = run_command(["git", "clone", "--depth", "1", url, str(target)], check=False)
+        if proc.returncode == 0 and is_valid_wechatmsg_tool(target):
+            out(f"WeChatMsg 下载完成: {target}", "green")
+            return target
+        last_error = proc.returncode
+        if target.exists():
+            shutil.rmtree(target, ignore_errors=True)
+        out("这个 WeChatMsg 源不可用或缺少解密模块，自动切换备用源。", "yellow")
+
+    for local in (ROOT / "WeChatMsg-gitee", ROOT / "WeChatMsg"):
+        if is_valid_wechatmsg_tool(local):
+            out(f"网络下载失败，复用本地 WeChatMsg: {local}", "green")
+            return local
+    raise SystemExit(last_error or 1)
 
 def ensure_llama_cpp() -> Path:
     path = clone_with_fallback(LLAMA_CPP_URLS, TOOLS_CACHE / "llama.cpp", "llama.cpp")
@@ -691,6 +857,124 @@ def command_wechat_decrypt(args: argparse.Namespace) -> None:
 
 def command_wechat_scan(_args: argparse.Namespace) -> None:
     print_wechat_scan()
+
+
+def load_wechatmsg_modules(tool: Path):
+    sys.path.insert(0, str(tool))
+    try:
+        from app.decrypt import decrypt as wx_decrypt
+        from app.decrypt import get_wx_info
+    except Exception as exc:
+        raise RuntimeError(f"无法导入 WeChatMsg 解密模块：{exc}") from exc
+    version_path = tool / "app" / "resources" / "data" / "version_list.json"
+    if not version_path.exists():
+        raise RuntimeError(f"未找到 version_list.json：{version_path}")
+    version_list = json.loads(version_path.read_text(encoding="utf-8"))
+    return get_wx_info, wx_decrypt, version_list
+
+
+def supported_wechat_version_summary(version_list: Any) -> str:
+    if isinstance(version_list, dict):
+        versions = [str(item) for item in version_list.keys()]
+    elif isinstance(version_list, list):
+        versions = [str(item) for item in version_list]
+    else:
+        return ""
+    if not versions:
+        return ""
+
+    def key(version: str) -> tuple[int, ...]:
+        parts: list[int] = []
+        for item in version.split("."):
+            try:
+                parts.append(int(item))
+            except ValueError:
+                parts.append(0)
+        return tuple(parts)
+
+    versions = sorted(versions, key=key)
+    return f"{versions[0]} - {versions[-1]}（共 {len(versions)} 个版本号）"
+
+
+def choose_wechat_info(infos: Any, wxid_hint: str = "") -> dict[str, Any]:
+    if isinstance(infos, int):
+        messages = {
+            -1: "没有检测到正在运行的微信。请先打开并登录低版本微信。",
+            -2: "微信版本不匹配。",
+            -3: "没有找到 WeChatWin.dll。",
+            -10086: "未知错误。",
+        }
+        raise RuntimeError(messages.get(infos, f"获取微信信息失败：{infos}"))
+    if isinstance(infos, str):
+        raise RuntimeError(f"当前微信版本可能不支持自动读取信息：{infos}")
+    if not isinstance(infos, list) or not infos:
+        raise RuntimeError("没有读取到微信账号信息。")
+    candidates = [item for item in infos if isinstance(item, dict)]
+    if wxid_hint:
+        candidates.sort(key=lambda item: item.get("wxid") == wxid_hint, reverse=True)
+    for item in candidates:
+        key = str(item.get("key") or "")
+        wxid = str(item.get("wxid") or "")
+        if len(key) == 64 and wxid and wxid != "None":
+            return item
+    raise RuntimeError("读取到了微信进程，但没有拿到可用 key。请确认微信已登录、版本受支持，必要时用管理员权限运行终端。")
+
+
+def command_wechat_auto_decrypt(args: argparse.Namespace) -> None:
+    if not is_windows():
+        out("自动读取微信进程 key 目前只支持 Windows。", "red")
+        raise SystemExit(1)
+
+    heading(
+        "自动解密准备",
+        "请先安装/打开支持的低版本 PC 微信，确认已登录，并等待聊天记录同步完成。"
+        "推荐使用 WeChatMsg 支持的 3.x 低版本；微信 4.x 通常不能自动读取 key。"
+        "新版和旧版微信可能使用不同数据目录，扫描结果不对时请先在微信里确认记录是否存在。",
+    )
+    accounts, _ = print_wechat_scan()
+    if not wechat_processes():
+        if not open_wechat_if_possible():
+            out("没有检测到微信进程，也无法自动定位 WeChat.exe。请手动打开微信并登录。", "yellow")
+        if not args.yes:
+            input("请确认微信已打开、已登录、聊天记录已同步后按回车继续...")
+
+    tool = Path(args.tool) if args.tool else ensure_wechatmsg()
+    req = tool / "requirements.txt"
+    if req.exists() and args.install_deps:
+        run_command([sys.executable, "-m", "pip", "install", "-r", str(req)], cwd=tool)
+
+    try:
+        get_wx_info, wx_decrypt, version_list = load_wechatmsg_modules(tool)
+        version_summary = supported_wechat_version_summary(version_list)
+        if version_summary:
+            out(f"WeChatMsg 当前版本表: {version_summary}", "cyan")
+        info = choose_wechat_info(get_wx_info.get_info(version_list), args.wxid)
+        out(f"检测到微信账号: wxid={info.get('wxid')} version={info.get('version')} pid={info.get('pid')}", "green")
+        wechat_files = Path(args.wechat_files) if args.wechat_files else Path(str(info.get("filePath") or ""))
+        if not wechat_files.exists() and accounts:
+            candidates = [item["path"] for item in accounts]
+            if args.wxid:
+                candidates.sort(key=lambda path: path.name == args.wxid, reverse=True)
+            wechat_files = choose_path_from_candidates("选择微信账号目录", candidates, None, auto_yes=args.yes)
+        db_dir = wechat_files / "Msg"
+        if not db_dir.exists():
+            raise RuntimeError(f"未找到 Msg 目录：{db_dir}")
+        out_dir = Path(args.out or ROOT / "wechat_decrypted")
+        out_dir.mkdir(parents=True, exist_ok=True)
+        ok, detail = wx_decrypt.batch_decrypt(str(info["key"]), str(db_dir), str(out_dir), is_logging=True)
+        if not ok:
+            raise RuntimeError(str(detail))
+        result = check_db(out_dir)
+        if not result["ok"]:
+            raise RuntimeError(f"解密完成但检查未通过：{out_dir}")
+        out(f"自动解密成功：{out_dir}", "green")
+        out(f"de_MSG*.db: {len(result['msg_dbs'])}", "green")
+    except Exception as exc:
+        out(f"自动解密失败：{exc}", "red")
+        if args.fallback_gui:
+            out("改为打开 WeChatMsg 图形界面兜底。", "yellow")
+            command_wechat_decrypt(argparse.Namespace(tool=str(tool), yes=args.yes))
+        raise SystemExit(1)
 
 
 def command_wechat_check(args: argparse.Namespace) -> None:
@@ -1077,14 +1361,14 @@ def wizard(args: argparse.Namespace) -> None:
     elif decrypted_candidates:
         choice = prompt_choice(
             "已发现可用的解密数据库，要直接使用吗？",
-            ["使用扫描到的解密目录", "重新打开 WeChatMsg 解密", "跳过微信步骤，使用已有 contacts/data"],
+            ["使用扫描到的解密目录", "自动读取微信并解密", "跳过微信步骤，使用已有 contacts/data"],
             1,
             auto_yes=args.yes,
         )
     else:
         choice = prompt_choice(
             "微信数据库准备情况",
-            ["帮我下载并打开 WeChatMsg，我手动解密后继续", "我已经有解密后的数据库目录", "跳过微信步骤，使用已有 contacts/data"],
+            ["自动读取微信并解密（推荐）", "我已经有解密后的数据库目录", "跳过微信步骤，使用已有 contacts/data"],
             1,
             auto_yes=args.yes,
         )
@@ -1094,9 +1378,22 @@ def wizard(args: argparse.Namespace) -> None:
             choice = 1
     decrypted = Path(args.decrypted or decrypted_default)
     if choice == 2:
-        command_wechat_decrypt(argparse.Namespace(tool="", yes=args.yes))
-        out("完成解密后回到这里。", "yellow")
-        prompt_text("按回车继续", "", auto_yes=args.yes)
+        try:
+            command_wechat_auto_decrypt(
+                argparse.Namespace(
+                    out=decrypted_default,
+                    tool="",
+                    wechat_files="",
+                    wxid="",
+                    install_deps=True,
+                    fallback_gui=True,
+                    yes=args.yes,
+                )
+            )
+        except SystemExit:
+            out("如果已打开 WeChatMsg 图形界面，请在其中完成解密。", "yellow")
+        if not args.yes:
+            prompt_text("完成自动/手动解密后按回车继续", "")
         refreshed = find_decrypted_dirs()
         decrypted = choose_path_from_candidates("选择解密目录", refreshed, Path(decrypted_default), auto_yes=args.yes)
     elif choice == 1:
@@ -1251,6 +1548,15 @@ def build_parser() -> argparse.ArgumentParser:
     wechat_sub = wechat.add_subparsers(dest="wechat_command", required=True)
     p = wechat_sub.add_parser("scan")
     p.set_defaults(func=command_wechat_scan)
+    p = wechat_sub.add_parser("auto-decrypt")
+    p.add_argument("--out", default=str(ROOT / "wechat_decrypted"))
+    p.add_argument("--tool", default="")
+    p.add_argument("--wechat-files", default="")
+    p.add_argument("--wxid", default="")
+    p.add_argument("--install-deps", action=argparse.BooleanOptionalAction, default=True)
+    p.add_argument("--no-fallback-gui", dest="fallback_gui", action="store_false")
+    p.add_argument("--yes", action="store_true")
+    p.set_defaults(func=command_wechat_auto_decrypt)
     p = wechat_sub.add_parser("decrypt")
     p.add_argument("--tool", default="")
     p.add_argument("--yes", action="store_true")
