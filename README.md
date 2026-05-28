@@ -87,6 +87,7 @@ me-distilled setup models --all
 me-distilled wechat scan
 me-distilled wechat locate
 me-distilled wechat auto-decrypt
+me-distilled wechat wdecipher
 me-distilled wechat check --decrypted ./wechat_decrypted
 ```
 
@@ -94,7 +95,9 @@ me-distilled wechat check --decrypted ./wechat_decrypted
 
 `wechat locate` 会在微信已经打开并登录时，直接读取运行中的微信进程信息，打印 `wxid`、微信版本、WeChatMsg 支持版本范围、`filePath` 和目录候选。静态扫描找不到目录时优先用这个命令。
 
-`wechat auto-decrypt` 会先提醒用户安装/打开支持的低版本 PC 微信并同步聊天记录，然后尝试自动读取正在运行的微信进程信息、定位账号目录并解密数据库。若微信版本、权限或登录状态导致自动解密失败，会自动打开 WeChatMsg 图形界面作为兜底。
+`wechat auto-decrypt` 会先提醒用户安装/打开支持的低版本 PC 微信并同步聊天记录，然后尝试自动读取正在运行的微信进程信息、定位账号目录并解密数据库。若 WeChatMsg 版本表不支持当前微信，会自动切换到 WDecipher/PyWxDump 备用方式读取 `wx_dir/db_key` 并解密；如果备用方式也失败，再打开 WeChatMsg 图形界面作为兜底。
+
+`wechat wdecipher` 可以显式使用 WDecipher/PyWxDump 备用解密方式，适合当前微信版本不在 WeChatMsg `version_list.json` 里，但运行中的微信仍可通过内存搜索拿到 `db_key` 的情况。
 
 支持版本以 WeChatMsg 自带的 `version_list.json` 为准。当前工具会在运行时打印版本范围；通常建议使用 PC 微信 3.x 低版本，微信 4.x 往往无法自动读取 key。旧版微信和新版微信可能使用不同的聊天记录目录，所以换版本后需要在旧版微信里重新同步聊天记录。
 
