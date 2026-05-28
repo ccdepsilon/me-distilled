@@ -7,13 +7,28 @@ Me-Distilled 是一个本地优先的命令行工具，用于把已授权的微�
 ## 功能
 
 - 扫描本机微信数据目录和已解密数据库目录。
-- 优先使用 WDecipher/PyWxDump 自动解密微信数据库，失败后使用 WeChatMsg 兜底。
+- 优先使用 WDecipher 自动解密微信数据库，失败后使用 WeChatMsg 兜底。
 - 按联系人导出一对一聊天记录。
 - 构建适合聊天风格微调的监督训练数据。
 - 支持文本、emoji 标签、Unicode emoji 和实验性的 sticker 标签数据模式。
 - 本地训练 LoRA adapter。
 - 将 adapter 转为 GGUF，并创建 Ollama 模型。
 - 可选准备一个本地 Web 聊天前端。
+
+## 主要开源组件
+
+本项目是一个本地流水线封装，核心能力来自以下开源项目和生态：
+
+- WDecipher：读取运行中的 Windows PC 微信信息并解密本地 SQLite 数据库。
+- WeChatMsg：作为微信数据库解密和导出流程的备用工具。
+- llama.cpp：将 LoRA adapter 转换为 GGUF。
+- Ollama：本地模型创建和推理。
+- Qwen2.5-7B-Instruct：默认训练基座模型。
+- ModelScope / Hugging Face Hub：模型下载来源。
+- PyTorch / Transformers / PEFT / Accelerate：LoRA 训练。
+- Next.js / React：可选 Web 聊天前端。
+
+具体许可证和使用限制请以各上游项目为准。
 
 ## 环境要求
 
@@ -120,7 +135,20 @@ me-distilled wechat auto-decrypt
 me-distilled wechat check --decrypted ./wechat_decrypted
 ```
 
-`wechat auto-decrypt` 会优先通过 WDecipher/PyWxDump 读取运行中的微信进程并解密数据库；失败后会尝试 WeChatMsg 自动解密，再失败则打开 WeChatMsg 图形界面兜底。
+`wechat auto-decrypt` 会优先通过 WDecipher 读取运行中的微信进程并解密数据库；失败后会尝试 WeChatMsg 自动解密，再失败则打开 WeChatMsg 图形界面兜底。
+
+### 微信版本支持
+
+自动解密主要面向 Windows PC 微信 3.x。实际能否自动解密取决于当前微信版本、登录状态、进程权限，以及工具是否能从运行中的微信进程读取到有效的 64 位 `db_key`。
+
+当前建议：
+
+- 推荐：Windows PC 微信 3.x，先打开并登录微信，确认聊天记录已经同步。
+- 已验证：3.9.12.57 可通过 WDecipher 路径读取并解密。
+- 常见可用范围：3.2.x 到 3.9.x 的 PC 微信版本更可能成功。
+- 不推荐：微信 4.x、新版大改版客户端、Mac 微信、移动端微信数据库。
+
+WeChatMsg 兜底路径的支持范围以其上游工具自带版本表为准；本工具会在运行时尽量打印可读取到的版本信息。若自动解密失败，可以手动准备已解密数据库目录后继续执行后续数据构建和训练步骤。
 
 联系人匹配和聊天导出：
 
