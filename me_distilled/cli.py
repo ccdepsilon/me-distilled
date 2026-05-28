@@ -392,6 +392,127 @@ def find_wechat_files() -> list[Path]:
     return candidates
 
 
+def scan_wechat_accounts() -> list[dict[str, Any]]:
+    accounts = []
+    for path in find_wechat_files():
+        custom = path / "FileStorage" / "CustomEmotion"
+        msg = path / "Msg"
+        accounts.append(
+            {
+                "path": path,
+                "account": path.name,
+                "has_msg": msg.exists(),
+                "has_file_storage": (path / "FileStorage").exists(),
+                "has_custom_emotion": custom.exists(),
+                "custom_emotion_files": sum(1 for item in custom.rglob("*") if item.is_file()) if custom.exists() else 0,
+            }
+        )
+    return accounts
+
+
+def find_decrypted_dirs() -> list[Path]:
+    candidates: list[Path] = []
+    roots = [ROOT, Path.cwd(), ROOT / "runs"]
+    for root in roots:
+        if not root.exists():
+            continue
+        direct = root / "wechat_decrypted"
+        if direct.exists():
+            candidates.append(direct)
+        for path in root.glob("*/wechat_decrypted"):
+            candidates.append(path)
+        for path in root.glob("*/*/wechat_decrypted"):
+            candidates.append(path)
+    unique: list[Path] = []
+    seen: set[str] = set()
+    for path in candidates:
+        key = str(path.resolve())
+        if key in seen:
+            continue
+        seen.add(key)
+        if check_db(path)["ok"]:
+            unique.append(path)
+    return unique
+
+
+def print_wechat_scan() -> tuple[list[dict[str, Any]], list[Path]]:
+    accounts = scan_wechat_accounts()
+    decrypted_dirs = find_decrypted_dirs()
+    heading("微信目录扫描")
+    if console and Table:
+        table = Table(title="微信账号目录", show_header=True, header_style="bold")
+        table.add_column("#")
+        table.add_column("账号目录")
+        table.add_column("Msg")
+        table.add_column("CustomEmotion")
+        table.add_column("路径")
+        for idx, item in enumerate(accounts, 1):
+            table.add_row(
+                str(idx),
+                str(item["account"]),
+                "OK" if item["has_msg"] else "-",
+                str(item["custom_emotion_files"]) if item["has_custom_emotion"] else "-",
+                str(item["path"]),
+            )
+        console.print(table)
+
+        table = Table(title="已解密数据库目录", show_header=True, header_style="bold")
+        table.add_column("#")
+        table.add_column("目录")
+        table.add_column("MSG DB 数")
+        table.add_column("Emotion")
+        for idx, path in enumerate(decrypted_dirs, 1):
+            info = check_db(path)
+            table.add_row(str(idx), str(path), str(len(info["msg_dbs"])), "OK" if info["emotion"] else "-")
+        console.print(table)
+    else:
+        print("微信账号目录:")
+        for idx, item in enumerate(accounts, 1):
+            print(f"{idx}. {item['account']} msg={item['has_msg']} custom={item['custom_emotion_files']} {item['path']}")
+        print("已解密数据库目录:")
+        for idx, path in enumerate(decrypted_dirs, 1):
+            info = check_db(path)
+            print(f"{idx}. msg_dbs={len(info['msg_dbs'])} emotion={info['emotion']} {path}")
+    if not accounts:
+        out("没有在默认文档目录发现微信账号目录。可稍后用 --wechat-files 手动指定。", "yellow")
+    if not decrypted_dirs:
+        out("没有发现可用的已解密数据库目录。需要先运行 wechat decrypt 并在 WeChatMsg 中导出。", "yellow")
+    return accounts, decrypted_dirs
+
+
+def choose_path_from_candidates(
+    question: str,
+    candidates: list[Path],
+    default: Path | None = None,
+    *,
+    auto_yes: bool = False,
+) -> Path:
+    if auto_yes:
+        chosen = candidates[0] if candidates else default
+        if chosen:
+            out(f"{question} -> {chosen}", "dim")
+            return chosen
+    if candidates:
+        out("")
+        out(question, "bold")
+        for idx, path in enumerate(candidates, 1):
+            out(f"  {idx}. {path}")
+        if default:
+            out(f"  0. 手动输入或使用默认: {default}")
+        answer = input("请选择编号，或直接粘贴路径 [1]: ").strip()
+        if not answer:
+            return candidates[0]
+        try:
+            value = int(answer)
+            if value == 0 and default:
+                return Path(prompt_text("请输入路径", str(default), required=True))
+            if 1 <= value <= len(candidates):
+                return candidates[value - 1]
+        except ValueError:
+            return Path(answer)
+    return Path(prompt_text(question, str(default or ""), required=True, auto_yes=auto_yes))
+
+
 def env_for_run(
     run_dir: Path,
     decrypted: Path,
@@ -550,6 +671,11 @@ def command_setup_models(args: argparse.Namespace) -> None:
 
 def command_wechat_decrypt(args: argparse.Namespace) -> None:
     tool = Path(args.tool) if args.tool else ensure_wechatmsg()
+    accounts, decrypted_dirs = print_wechat_scan()
+    if decrypted_dirs:
+        out("已经发现可用的解密目录；如果这些目录是最新的，可以直接跳过解密并运行 wechat check / wizard。", "green")
+    if accounts:
+        out("WeChatMsg 打开后，如果需要选择微信数据目录，优先选择上表中的账号目录。", "cyan")
     req = tool / "requirements.txt"
     if req.exists() and prompt_yes("是否为 WeChatMsg 安装/更新依赖？", True, auto_yes=args.yes):
         run_command([sys.executable, "-m", "pip", "install", "-r", str(req)], cwd=tool)
@@ -561,6 +687,10 @@ def command_wechat_decrypt(args: argparse.Namespace) -> None:
     subprocess.Popen([sys.executable, str(main_py)], cwd=tool)
     out("WeChatMsg 已启动。完成解密后运行：")
     out("  me-distilled wechat check --decrypted ./wechat_decrypted", "cyan")
+
+
+def command_wechat_scan(_args: argparse.Namespace) -> None:
+    print_wechat_scan()
 
 
 def command_wechat_check(args: argparse.Namespace) -> None:
@@ -940,21 +1070,41 @@ def wizard(args: argparse.Namespace) -> None:
         "\n微信提示：建议使用能被 WeChatMsg 识别的 PC 微信数据。新版/旧版微信数据可能分开存储，切版本后要确认聊天记录已同步。",
         "yellow",
     )
+    accounts, decrypted_candidates = print_wechat_scan()
     decrypted_default = str(ROOT / "wechat_decrypted")
-    choice = prompt_choice(
-        "微信数据库准备情况",
-        ["我已经有解密后的数据库目录", "帮我下载并打开 WeChatMsg，我手动解密后继续", "跳过微信步骤，使用已有 contacts/data"],
-        1,
-        auto_yes=args.yes,
-    )
+    if args.decrypted:
+        choice = 1
+    elif decrypted_candidates:
+        choice = prompt_choice(
+            "已发现可用的解密数据库，要直接使用吗？",
+            ["使用扫描到的解密目录", "重新打开 WeChatMsg 解密", "跳过微信步骤，使用已有 contacts/data"],
+            1,
+            auto_yes=args.yes,
+        )
+    else:
+        choice = prompt_choice(
+            "微信数据库准备情况",
+            ["帮我下载并打开 WeChatMsg，我手动解密后继续", "我已经有解密后的数据库目录", "跳过微信步骤，使用已有 contacts/data"],
+            1,
+            auto_yes=args.yes,
+        )
+        if choice == 1:
+            choice = 2
+        elif choice == 2:
+            choice = 1
     decrypted = Path(args.decrypted or decrypted_default)
     if choice == 2:
         command_wechat_decrypt(argparse.Namespace(tool="", yes=args.yes))
         out("完成解密后回到这里。", "yellow")
         prompt_text("按回车继续", "", auto_yes=args.yes)
-        decrypted = Path(prompt_text("解密目录", decrypted_default, required=True, auto_yes=args.yes))
+        refreshed = find_decrypted_dirs()
+        decrypted = choose_path_from_candidates("选择解密目录", refreshed, Path(decrypted_default), auto_yes=args.yes)
     elif choice == 1:
-        decrypted = Path(prompt_text("解密目录", decrypted_default, required=True, auto_yes=args.yes))
+        decrypted = (
+            Path(args.decrypted)
+            if args.decrypted
+            else choose_path_from_candidates("选择解密目录", decrypted_candidates, Path(decrypted_default), auto_yes=args.yes)
+        )
 
     if choice != 3:
         command_wechat_check(argparse.Namespace(decrypted=str(decrypted)))
@@ -984,9 +1134,8 @@ def wizard(args: argparse.Namespace) -> None:
 
     use_stickers = not args.no_sticker and prompt_yes("是否处理本地表情包资源？", True, auto_yes=args.yes)
     if use_stickers and choice != 3:
-        candidates = find_wechat_files()
-        default_files = str(candidates[0]) if candidates else ""
-        wechat_files = prompt_text("微信 Files 目录", default_files, required=not default_files, auto_yes=args.yes)
+        account_paths = [item["path"] for item in accounts] or find_wechat_files()
+        wechat_files = choose_path_from_candidates("选择微信 Files 账号目录", account_paths, None, auto_yes=args.yes)
         command_sticker_export(argparse.Namespace(run=str(run_dir), resume="", decrypted=str(decrypted), wechat_files=wechat_files))
         command_sticker_map(argparse.Namespace(run=str(run_dir), resume="", decrypted=str(decrypted)))
 
@@ -1100,6 +1249,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     wechat = sub.add_parser("wechat", help="微信数据库解密辅助、检查、导出")
     wechat_sub = wechat.add_subparsers(dest="wechat_command", required=True)
+    p = wechat_sub.add_parser("scan")
+    p.set_defaults(func=command_wechat_scan)
     p = wechat_sub.add_parser("decrypt")
     p.add_argument("--tool", default="")
     p.add_argument("--yes", action="store_true")
