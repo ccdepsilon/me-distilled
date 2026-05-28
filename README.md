@@ -1,29 +1,30 @@
 # Me-Distilled
 
-Me-Distilled is a local-first CLI pipeline for building a personal Chinese chat-style model from authorized WeChat chat records. It helps you decrypt and export local WeChat data, build training datasets, fine-tune a LoRA adapter, convert the adapter to GGUF, and create an Ollama model for local inference.
+Me-Distilled 是一个本地优先的命令行工具，用于把已授权的微信聊天记录处理成中文聊天风格训练数据，并完成 LoRA 微调、GGUF adapter 转换和 Ollama 本地部署。
 
-The project is designed for personal research and experimentation. Only process data that you own or have explicit permission to use.
+本项目适合个人研究、学习和本地实验。请只处理你本人拥有或已获得明确授权的数据。
 
-## Features
+## 功能
 
-- Scan local WeChat data directories and decrypted database folders.
-- Prefer WDecipher/PyWxDump for automatic WeChat database decryption, with WeChatMsg as a fallback.
-- Export selected one-to-one conversations from decrypted WeChat databases.
-- Build chat-style supervised fine-tuning data with text and optional emoji/sticker handling.
-- Train a Qwen-style LoRA adapter locally.
-- Convert the adapter to GGUF and create an Ollama model.
-- Optionally prepare a small local web chat frontend.
+- 扫描本机微信数据目录和已解密数据库目录。
+- 优先使用 WDecipher/PyWxDump 自动解密微信数据库，失败后使用 WeChatMsg 兜底。
+- 按联系人导出一对一聊天记录。
+- 构建适合聊天风格微调的监督训练数据。
+- 支持文本、emoji 标签、Unicode emoji 和实验性的 sticker 标签数据模式。
+- 本地训练 LoRA adapter。
+- 将 adapter 转为 GGUF，并创建 Ollama 模型。
+- 可选准备一个本地 Web 聊天前端。
 
-## Requirements
+## 环境要求
 
-- Windows is recommended for WeChat decryption.
+- Windows：推荐用于微信数据库解密。
 - Python 3.10+
 - Git
 - Ollama
-- NVIDIA GPU + CUDA environment if you plan to train a 7B LoRA locally
-- Authorized WeChat chat records
+- 如需本地训练 7B LoRA，建议准备 NVIDIA GPU 和 CUDA 环境。
+- 已授权的微信聊天记录。
 
-## Install
+## 安装
 
 ```bash
 git clone https://github.com/ccdepsilon/me-distilled.git
@@ -32,39 +33,39 @@ python -m pip install -e .
 me-distilled setup deps --kind cli
 ```
 
-Install training dependencies only when you are ready to train:
+准备训练环境时再安装训练依赖：
 
 ```bash
 me-distilled setup deps --kind train
 ```
 
-## Quick Start
+## 快速开始
 
-Run the interactive wizard:
+运行交互式向导：
 
 ```bash
 me-distilled wizard
 ```
 
-The wizard will guide you through:
+向导会依次完成：
 
 ```text
-authorization check
--> environment check
--> WeChat directory scan
--> database decrypt/check
--> contact selection
--> chat export
--> optional emoji/sticker resource processing
--> dataset build
--> model download/check
--> LoRA training
--> GGUF adapter conversion
--> Ollama model creation
--> quick test
+授权确认
+-> 环境检查
+-> 微信目录扫描
+-> 数据库解密/检查
+-> 选择联系人
+-> 导出聊天记录
+-> 可选处理 emoji/sticker 资源
+-> 构建训练数据
+-> 下载/检查模型
+-> LoRA 训练
+-> GGUF adapter 转换
+-> 创建 Ollama 模型
+-> 快速测试
 ```
 
-Common options:
+常用参数：
 
 ```bash
 me-distilled wizard --run my-run
@@ -75,33 +76,33 @@ me-distilled wizard --no-sticker
 me-distilled wizard --data-mode text-emoji-tag
 ```
 
-If you want to add a small number of identity Q&A examples:
+如果需要加入少量身份问答样本：
 
 ```bash
 me-distilled wizard \
-  --identity-answer "I am <your answer>" \
-  --identity-answer "<another answer>"
+  --identity-answer "我是某某" \
+  --identity-answer "另一个回答"
 ```
 
-## Data Modes
+## 数据模式
 
-The wizard currently offers three data modes:
+向导会让你选择训练数据中的表情表示方式：
 
-- `text-emoji-tag`: recommended. Training data keeps emoji as semantic tags, for example `<emoji:smile>`. A frontend can later map the tag to a Unicode emoji or image.
-- `text-emoji`: stores Unicode emoji directly in the training text.
-- `sticker`: experimental. Stores custom sticker tags such as `<sticker:desc>` directly in the main chat model data.
+- `text-emoji-tag`：推荐。把 emoji 写成语义标签，例如 `<emoji:微笑>`，后续前端可以稳定映射成 Unicode emoji 或图片。
+- `text-emoji`：直接把 Unicode emoji 写入训练文本。
+- `sticker`：实验性。把自定义表情包写成 `<sticker:描述>` 标签并放入主聊天模型训练数据。
 
-For most users, `text-emoji-tag` is the safest default. Custom sticker sending is easier to control outside the main chat model with a separate selector or frontend rule.
+大多数情况下推荐使用 `text-emoji-tag`。自定义表情包更适合通过单独的 selector 或前端规则控制，不一定要直接放进主聊天模型。
 
-## Useful Commands
+## 常用命令
 
-Check the environment:
+检查环境：
 
 ```bash
 me-distilled doctor
 ```
 
-Install tools and dependencies:
+安装依赖、下载工具和模型：
 
 ```bash
 me-distilled setup deps --kind cli
@@ -110,7 +111,7 @@ me-distilled setup tools --all
 me-distilled setup models --all
 ```
 
-Work with WeChat databases:
+微信数据库相关：
 
 ```bash
 me-distilled wechat scan
@@ -119,16 +120,16 @@ me-distilled wechat auto-decrypt
 me-distilled wechat check --decrypted ./wechat_decrypted
 ```
 
-`wechat auto-decrypt` first tries WDecipher/PyWxDump against the running WeChat process. If that fails, it tries WeChatMsg automatic decryption, then falls back to opening the WeChatMsg GUI.
+`wechat auto-decrypt` 会优先通过 WDecipher/PyWxDump 读取运行中的微信进程并解密数据库；失败后会尝试 WeChatMsg 自动解密，再失败则打开 WeChatMsg 图形界面兜底。
 
-Match contacts and export chats:
+联系人匹配和聊天导出：
 
 ```bash
 me-distilled wechat match --decrypted ./wechat_decrypted --contacts ./contacts.txt
 me-distilled wechat export --run my-run --decrypted ./wechat_decrypted --contacts ./contacts.txt
 ```
 
-Build training data:
+构建训练数据：
 
 ```bash
 me-distilled data build \
@@ -138,7 +139,7 @@ me-distilled data build \
   --mode text-emoji-tag
 ```
 
-Train, convert, and deploy with Ollama:
+训练、转换和 Ollama 部署：
 
 ```bash
 me-distilled train lora --run my-run
@@ -147,17 +148,17 @@ me-distilled ollama create --run my-run --name me-distilled
 me-distilled ollama test --model me-distilled
 ```
 
-Optional local web frontend:
+可选本地 Web 前端：
 
 ```bash
 me-distilled web prepare --run my-run
 me-distilled web start --model me-distilled --port 3000
 ```
 
-## Privacy
+## 隐私说明
 
-Generated chat exports, decrypted databases, sticker assets, model weights, and run artifacts are ignored by Git by default. Do not commit private chat data, decrypted databases, sticker files, or model weights to a public repository.
+`.gitignore` 默认排除了聊天记录、解密数据库、表情资源、模型权重和训练产物。不要把私人聊天记录、解密数据库、表情文件或模型权重提交到公开仓库。
 
-## Disclaimer
+## 免责声明
 
-This project is for local research and learning. Respect platform terms, local laws, and the privacy of other people in your conversations.
+本项目仅用于本地研究和学习。请遵守平台规则、当地法律法规，并尊重聊天对象的隐私。
