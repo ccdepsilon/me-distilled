@@ -4,6 +4,18 @@ Me-Distilled 是一个本地优先的命令行工具，用于把已授权的微�
 
 本项目适合个人研究、学习和本地实验。请只处理你本人拥有或已获得明确授权的数据。
 
+## 重要：微信版本与聊天同步
+
+建议使用 Windows PC 微信 3.x，优先选择 3.9.x 或更低版本。自动解密依赖微信版本、登录状态、进程权限和本地数据库目录；微信 4.x、Mac 微信和移动端数据库不作为默认支持目标。
+
+如果你刚从新版微信降级，旧版微信可能看不到新版聊天记录。请先在手机微信同步需要的联系人：
+
+```text
+我 - 设置 - 聊天记录管理 - 导入与导出 - 导出到电脑 - 选择需要的联系人
+```
+
+同步完成后保持 PC 微信登录并打开，再运行本工具。
+
 ## 功能
 
 - 扫描本机微信数据目录和已解密数据库目录。
@@ -29,6 +41,20 @@ Me-Distilled 是一个本地优先的命令行工具，用于把已授权的微�
 - Next.js / React：可选 Web 聊天前端。
 
 具体许可证和使用限制请以各上游项目为准。
+
+## 下载优先级
+
+CLI 会自动按下面顺序尝试下载或调用，不需要用户手动选择国内/国外源：
+
+```text
+微信解密：WDecipher -> WeChatMsg
+WeChatMsg：gh-proxy.com -> ghfast.top -> github.com -> gitee.com 兜底
+llama.cpp：gh-proxy.com -> ghfast.top -> github.com
+基座模型：ModelScope -> Hugging Face / hf-mirror 直链
+Ollama Linux：openEuler 镜像包 -> ghfast.top -> gitmirror -> ollama.com
+```
+
+Gitee 上的 Ollama 镜像更适合查看源码，不一定提供可直接解压安装的官方二进制包，所以 CLI 安装 Ollama 时优先使用可校验大小的二进制下载源。
 
 ## 环境要求
 
@@ -78,6 +104,7 @@ me-distilled wizard
 -> GGUF adapter 转换
 -> 创建 Ollama 模型
 -> 快速测试
+-> 可选清理中间文件
 ```
 
 任意阶段都可以按 `Ctrl+C` 中断。关键选择步骤可以输入 `b` 返回上一步。已完成的文件会保留在当前 `runs/<run-name>`、`.cache/me-distilled`、`base_models` 等目录中，之后可以用 `--resume` 或重新运行同一命令继续。
@@ -179,6 +206,14 @@ me-distilled ollama create --run my-run --name me-distilled
 me-distilled ollama test --model me-distilled
 ```
 
+训练完成后可以清理中间文件：
+
+```bash
+me-distilled cleanup --run my-run
+```
+
+清理会删除导出的 txt、表情分析中间目录、日志和 LoRA checkpoints；默认保留训练 jsonl、最终 adapter、Modelfile、sticker 映射和状态文件。
+
 本地 Web 前端：
 
 ```bash
@@ -196,6 +231,23 @@ me-distilled web start --model me-distilled --port 3000
 
 ```text
 Use $me-distilled to process my authorized local WeChat data and train/deploy the model.
+```
+
+## 存储占用估计
+
+Qwen2.5-7B-Instruct 默认流程的实际占用取决于聊天记录和表情数量，可以按下面估算：
+
+```text
+Python 依赖和工具：2-6 GB
+HF/ModelScope 基座：14-18 GB
+GGUF Q4_K_M 基座：4.5-5.5 GB
+一次 run 的导出和训练数据：0.5-10 GB
+LoRA checkpoint 峰值：1-6 GB
+最终 adapter GGUF：100-300 MB
+
+训练前峰值建议预留：35-50 GB
+清理中间文件后常见保留：20-28 GB
+只保留 Ollama GGUF + adapter：约 5-6 GB
 ```
 
 ## 隐私说明

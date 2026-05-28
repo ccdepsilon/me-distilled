@@ -28,6 +28,9 @@ This skill is an execution workflow for agents. Do the work yourself with the re
    - Install CLI dependencies with `me-distilled setup deps --kind cli` if imports or commands fail.
 
 3. Prepare WeChat data.
+   - First remind the user to use Windows PC WeChat 3.x, preferably 3.9.x or below.
+   - If they downgraded WeChat, tell them to sync from phone before extraction: `我 - 设置 - 聊天记录管理 - 导入与导出 - 导出到电脑 - 选择需要的联系人`.
+   - Ask them to keep PC WeChat open and logged in while decrypting.
    - Ask for the target one-to-one contacts if no contacts file exists.
    - Run `me-distilled wechat scan`.
    - Prefer `me-distilled wechat auto-decrypt`; it tries WDecipher first, then WeChatMsg fallback.
@@ -61,6 +64,7 @@ This skill is an execution workflow for agents. Do the work yourself with the re
    - Run `me-distilled ollama create --run <run> --name <model-name>`.
    - Run `me-distilled ollama test --model <model-name>`.
    - If quality looks wrong, report likely data/training causes and inspect data reports before retraining.
+   - Ask whether to clear intermediate files. If yes, run `me-distilled cleanup --run <run>`.
 
 8. Optional web frontend.
    - Only prepare it when asked: `me-distilled web prepare --run <run>`.
@@ -74,6 +78,22 @@ This skill is an execution workflow for agents. Do the work yourself with the re
 - Data mode: `text-emoji-tag`
 - Ollama model name: `me-distilled`
 - WeChat support expectation: Windows PC WeChat 3.x is recommended; 3.9.12.57 has been verified through WDecipher. Treat WeChat 4.x, Mac WeChat, and mobile databases as unsupported unless the user provides already-decrypted databases.
+
+## Source Priority
+
+Use this order without asking the user to choose mirrors:
+
+- WeChat decrypt: WDecipher first, then WeChatMsg fallback.
+- WeChatMsg clone: `gh-proxy.com` -> `ghfast.top` -> `github.com` -> `gitee.com`.
+- llama.cpp clone: `gh-proxy.com` -> `ghfast.top` -> `github.com`.
+- Base model: ModelScope first, then Hugging Face or hf-mirror direct URL.
+- Ollama Linux binary: openEuler mirror -> `ghfast.top` -> gitmirror -> `ollama.com`.
+
+Gitee's Ollama repository is useful as a source mirror, but do not assume it has the official release binary. Prefer downloadable binary archives with a size check.
+
+## Storage Budget
+
+Before training Qwen2.5-7B, warn the user to reserve 35-50 GB. After cleanup, typical retained storage is about 20-28 GB if the HF base is kept, or about 5-6 GB if only the Ollama GGUF base and adapter are retained.
 
 ## Completion Report
 

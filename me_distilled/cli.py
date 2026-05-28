@@ -27,11 +27,13 @@ TOOLS_CACHE = CACHE_DIR / "tools"
 MODEL_CACHE = CACHE_DIR / "models"
 
 WECHATMSG_URLS = [
-    "https://gitee.com/lc044/WeChatMsg.git",
+    "https://gh-proxy.com/github.com/LC044/WeChatMsg.git",
     "https://ghfast.top/github.com/LC044/WeChatMsg.git",
     "https://github.com/LC044/WeChatMsg.git",
+    "https://gitee.com/lc044/WeChatMsg.git",
 ]
 LLAMA_CPP_URLS = [
+    "https://gh-proxy.com/github.com/ggml-org/llama.cpp.git",
     "https://ghfast.top/github.com/ggml-org/llama.cpp.git",
     "https://github.com/ggml-org/llama.cpp.git",
 ]
@@ -2035,6 +2037,42 @@ def command_web_start(args: argparse.Namespace) -> None:
     run_command(["npm", "run", "start", "--", "-H", args.host, "-p", str(args.port)], cwd=web, env=env)
 
 
+def command_cleanup(args: argparse.Namespace) -> None:
+    if not args.run and not args.resume:
+        raise SystemExit("请使用 --run 或 --resume 指定要清理的 run 目录。")
+    run_dir = Path(args.resume or args.run)
+    if not run_dir.is_absolute():
+        run_dir = (RUNS_DIR / run_dir) if args.run and run_dir.parent == Path(".") else (ROOT / run_dir)
+    if not run_dir.exists():
+        raise SystemExit(f"run 目录不存在: {run_dir}")
+    state = load_state(run_dir)
+    root = run_dir.resolve()
+    targets: list[Path] = [
+        run_dir / "exports" / "txt",
+        run_dir / "exports" / "txt_sticker_raw",
+        run_dir / "stickers" / "emotion_export",
+        run_dir / "logs",
+    ]
+    targets.extend((run_dir / "model" / "lora").glob("checkpoint-*"))
+    removed: list[str] = []
+    for target in targets:
+        if not target.exists():
+            continue
+        resolved = target.resolve()
+        if resolved == root or root not in resolved.parents:
+            raise SystemExit(f"拒绝清理非 run 目录内路径: {target}")
+        if target.is_dir():
+            shutil.rmtree(target)
+        else:
+            target.unlink()
+        removed.append(rel(target))
+    if removed:
+        heading("清理完成", "\n".join(removed))
+    else:
+        out("没有发现可清理的中间文件。", "green")
+    mark(run_dir, state, "cleaned")
+
+
 def collect_targets_interactive(path: Path, label: str) -> list[str]:
     out(f"\n请输入{label}，每行一个；空行结束。", "bold")
     values: list[str] = []
@@ -2073,7 +2111,9 @@ def wizard(args: argparse.Namespace) -> None:
     mark(run_dir, state, "deps_checked")
 
     out(
-        "\n微信提示：请先打开并登录 PC 微信，确认目标聊天记录已经同步。本工具会优先使用 WDecipher 自动解密，失败后再切换到 WeChatMsg 兜底。",
+        "\n微信提示：建议使用 PC 微信 3.x，先打开并登录微信，确认目标聊天记录已经同步。"
+        "如果刚从新版降级，请先在手机微信进入：我-设置-聊天记录管理-导入与导出-导出到电脑-选择需要的联系人。"
+        "本工具会优先使用 WDecipher 自动解密，失败后再切换到 WeChatMsg 兜底。",
         "yellow",
     )
     accounts, decrypted_candidates = print_wechat_scan()
@@ -2226,6 +2266,8 @@ def wizard(args: argparse.Namespace) -> None:
     model_name = args.ollama_name
     command_ollama_create(argparse.Namespace(run=str(run_dir), resume="", base_gguf=args.base_gguf or "", adapter="", name=model_name))
     command_ollama_test(argparse.Namespace(model=model_name, prompt=[], temperature=0.2))
+    if prompt_yes("是否清理训练中间文件以释放空间？会保留最终模型和训练数据。", False, auto_yes=args.yes):
+        command_cleanup(argparse.Namespace(run=str(run_dir), resume=""))
     web_hint = "是否准备并启动本地 Web 聊天前端？"
     if mode == "sticker":
         web_hint = "已选择 sticker 模式，建议启动 Web 前端以显示表情包图片。是否启动？"
@@ -2434,6 +2476,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--temperature", type=float, default=0.2)
     p.add_argument("--banned-phrases", default="")
     p.set_defaults(func=command_web_start)
+
+    p = sub.add_parser("cleanup", help="清理某次 run 的中间文件，保留最终模型和训练数据")
+    p.add_argument("--run")
+    p.add_argument("--resume")
+    p.set_defaults(func=command_cleanup)
 
     return parser
 
