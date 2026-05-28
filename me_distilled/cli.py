@@ -12,6 +12,7 @@ import sqlite3
 import subprocess
 import sys
 import textwrap
+import time
 import urllib.error
 import urllib.request
 from dataclasses import asdict, dataclass, field
@@ -221,16 +222,41 @@ def run_command(
     if env:
         merged_env.update(env)
     out(f"\n$ {' '.join(cmd)}", "cyan")
+    stdout_target: Any = None
+    stderr_target: Any = None
+    log_file = None
     if log:
         log.parent.mkdir(parents=True, exist_ok=True)
-        with log.open("a", encoding="utf-8", newline="\n") as f:
-            f.write(f"\n\n$ {' '.join(cmd)}\n")
-            proc = subprocess.run(cmd, cwd=cwd, env=merged_env, text=True, stdout=f, stderr=subprocess.STDOUT)
-    else:
-        proc = subprocess.run(cmd, cwd=cwd, env=merged_env, text=True)
-    if check and proc.returncode != 0:
-        raise SystemExit(proc.returncode)
-    return proc
+        log_file = log.open("a", encoding="utf-8", newline="\n")
+        log_file.write(f"\n\n$ {' '.join(cmd)}\n")
+        log_file.flush()
+        stdout_target = log_file
+        stderr_target = subprocess.STDOUT
+    try:
+        proc = subprocess.Popen(cmd, cwd=cwd, env=merged_env, text=True, stdout=stdout_target, stderr=stderr_target)
+        try:
+            while True:
+                returncode = proc.poll()
+                if returncode is not None:
+                    break
+                time.sleep(0.2)
+        except KeyboardInterrupt:
+            out("\n收到 Ctrl+C，正在停止当前子进程...", "yellow")
+            try:
+                proc.terminate()
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                out("子进程未及时退出，正在强制结束。", "yellow")
+                proc.kill()
+                proc.wait()
+            raise SystemExit(130)
+    finally:
+        if log_file is not None:
+            log_file.close()
+    result = subprocess.CompletedProcess(cmd, returncode)
+    if check and result.returncode != 0:
+        raise SystemExit(result.returncode)
+    return result
 
 
 def command_exists(name: str) -> bool:
@@ -254,6 +280,11 @@ def install_requirements(path: Path) -> None:
 
 def install_python_packages(packages: list[str]) -> None:
     run_command([sys.executable, "-m", "pip", "install", *packages])
+
+
+def interrupted() -> None:
+    out("\n已收到 Ctrl+C，中断当前流程。已完成的文件会保留，可稍后用 --resume 或同一命令继续。", "yellow")
+    raise SystemExit(130)
 
 
 def remove_tree(path: Path) -> None:
@@ -764,27 +795,76 @@ def ensure_hf_model(path: Path | None = None) -> Path | None:
         return target
     target.parent.mkdir(parents=True, exist_ok=True)
     out("正在下载 Qwen2.5-7B-Instruct。优先 ModelScope，失败后切 Hugging Face。", "cyan")
-    if module_exists("modelscope"):
-        try:
-            os.environ.setdefault("MODELSCOPE_CACHE", str(MODEL_CACHE / "modelscope"))
-            from modelscope import snapshot_download
+    result_file = CACHE_DIR / f"download-model-{os.getpid()}.json"
+    if result_file.exists():
+        result_file.unlink()
+    script = r"""
+import json
+import os
+import sys
+from pathlib import Path
 
-            downloaded = Path(snapshot_download(MODELSCOPE_MODEL_ID, cache_dir=str(MODEL_CACHE / "modelscope")))
-            out(f"ModelScope 下载完成: {downloaded}", "green")
-            return downloaded
-        except Exception as exc:
-            out(f"ModelScope 下载失败: {exc}", "yellow")
-    else:
-        out("未安装 modelscope，跳过国内源。可运行 `me-distilled setup deps --kind cli`。", "yellow")
-    if module_exists("huggingface_hub"):
-        try:
-            from huggingface_hub import snapshot_download
+result_file = Path(os.environ["ME_DISTILLED_DOWNLOAD_RESULT"])
+model_cache = Path(os.environ["ME_DISTILLED_MODEL_CACHE"])
+target = Path(os.environ["ME_DISTILLED_TARGET"])
+modelscope_id = os.environ["ME_DISTILLED_MODELSCOPE_ID"]
+hf_id = os.environ["ME_DISTILLED_HF_ID"]
 
-            downloaded = Path(snapshot_download(HF_MODEL_ID, local_dir=str(target), local_dir_use_symlinks=False))
-            out(f"Hugging Face 下载完成: {downloaded}", "green")
-            return downloaded
-        except Exception as exc:
-            out(f"Hugging Face 下载失败: {exc}", "yellow")
+def write_result(status, path="", source="", error=""):
+    result_file.parent.mkdir(parents=True, exist_ok=True)
+    result_file.write_text(
+        json.dumps({"status": status, "path": path, "source": source, "error": error}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+last_error = ""
+try:
+    try:
+        from modelscope import snapshot_download
+        os.environ.setdefault("MODELSCOPE_CACHE", str(model_cache / "modelscope"))
+        downloaded = snapshot_download(modelscope_id, cache_dir=str(model_cache / "modelscope"))
+        print(f"ModelScope 下载完成: {downloaded}", flush=True)
+        write_result("ok", downloaded, "modelscope")
+        sys.exit(0)
+    except KeyboardInterrupt:
+        raise
+    except Exception as exc:
+        last_error = f"ModelScope: {exc}"
+        print(f"ModelScope 下载失败: {exc}", flush=True)
+
+    try:
+        from huggingface_hub import snapshot_download
+        downloaded = snapshot_download(hf_id, local_dir=str(target), local_dir_use_symlinks=False)
+        print(f"Hugging Face 下载完成: {downloaded}", flush=True)
+        write_result("ok", downloaded, "huggingface")
+        sys.exit(0)
+    except KeyboardInterrupt:
+        raise
+    except Exception as exc:
+        last_error = f"{last_error}; Hugging Face: {exc}" if last_error else f"Hugging Face: {exc}"
+        print(f"Hugging Face 下载失败: {exc}", flush=True)
+        write_result("error", error=last_error)
+        sys.exit(1)
+except KeyboardInterrupt:
+    print("模型下载已中断。", flush=True)
+    sys.exit(130)
+"""
+    env = {
+        "ME_DISTILLED_DOWNLOAD_RESULT": str(result_file),
+        "ME_DISTILLED_MODEL_CACHE": str(MODEL_CACHE),
+        "ME_DISTILLED_TARGET": str(target),
+        "ME_DISTILLED_MODELSCOPE_ID": MODELSCOPE_MODEL_ID,
+        "ME_DISTILLED_HF_ID": HF_MODEL_ID,
+    }
+    proc = run_command([sys.executable, "-c", script], env=env, check=False)
+    if proc.returncode == 130:
+        interrupted()
+    if result_file.exists():
+        result = read_json(result_file, {})
+        if result.get("status") == "ok" and result.get("path"):
+            return Path(str(result["path"]))
+        if result.get("error"):
+            out(f"基座下载失败: {result['error']}", "yellow")
     out("基座自动下载失败。请手动下载后用 --base 指定目录。", "red")
     return None
 
@@ -799,16 +879,60 @@ def ensure_base_gguf(path: Path | None = None) -> Path | None:
         out("未安装 huggingface-hub，无法自动下载 GGUF。", "yellow")
         return None
     out("正在下载 Qwen2.5-7B-Instruct Q4_K_M GGUF。", "cyan")
-    try:
-        from huggingface_hub import hf_hub_download
+    result_file = CACHE_DIR / f"download-gguf-{os.getpid()}.json"
+    if result_file.exists():
+        result_file.unlink()
+    script = r"""
+import json
+import os
+import sys
+from pathlib import Path
 
-        downloaded = Path(hf_hub_download(GGUF_REPO_ID, GGUF_FILENAME, local_dir=str(target.parent)))
-        out(f"GGUF 下载完成: {downloaded}", "green")
-        return downloaded
-    except Exception as exc:
-        out(f"GGUF 自动下载失败: {exc}", "yellow")
-        out("请手动下载 Qwen2.5-7B-Instruct-Q4_K_M.gguf 后用 --base-gguf 指定。", "yellow")
-        return None
+result_file = Path(os.environ["ME_DISTILLED_DOWNLOAD_RESULT"])
+repo_id = os.environ["ME_DISTILLED_GGUF_REPO_ID"]
+filename = os.environ["ME_DISTILLED_GGUF_FILENAME"]
+local_dir = os.environ["ME_DISTILLED_GGUF_LOCAL_DIR"]
+
+def write_result(status, path="", error=""):
+    result_file.parent.mkdir(parents=True, exist_ok=True)
+    result_file.write_text(
+        json.dumps({"status": status, "path": path, "error": error}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+try:
+    from huggingface_hub import hf_hub_download
+    downloaded = hf_hub_download(repo_id, filename, local_dir=local_dir)
+    print(f"GGUF 下载完成: {downloaded}", flush=True)
+    write_result("ok", downloaded)
+    sys.exit(0)
+except KeyboardInterrupt:
+    print("GGUF 下载已中断。", flush=True)
+    sys.exit(130)
+except Exception as exc:
+    print(f"GGUF 自动下载失败: {exc}", flush=True)
+    write_result("error", error=str(exc))
+    sys.exit(1)
+"""
+    env = {
+        "ME_DISTILLED_DOWNLOAD_RESULT": str(result_file),
+        "ME_DISTILLED_GGUF_REPO_ID": GGUF_REPO_ID,
+        "ME_DISTILLED_GGUF_FILENAME": GGUF_FILENAME,
+        "ME_DISTILLED_GGUF_LOCAL_DIR": str(target.parent),
+    }
+    proc = run_command([sys.executable, "-c", script], env=env, check=False)
+    if proc.returncode == 130:
+        interrupted()
+    if result_file.exists():
+        result = read_json(result_file, {})
+        if result.get("status") == "ok" and result.get("path"):
+            return Path(str(result["path"]))
+        if result.get("error"):
+            out(f"GGUF 自动下载失败: {result['error']}", "yellow")
+    else:
+        out("GGUF 自动下载失败。", "yellow")
+    out("请手动下载 Qwen2.5-7B-Instruct-Q4_K_M.gguf 后用 --base-gguf 指定。", "yellow")
+    return None
 
 
 def doctor_lines() -> list[tuple[str, str, str]]:
@@ -2029,7 +2153,10 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> None:
     parser = build_parser()
     args = parser.parse_args(argv)
-    args.func(args)
+    try:
+        args.func(args)
+    except KeyboardInterrupt:
+        interrupted()
 
 
 if __name__ == "__main__":

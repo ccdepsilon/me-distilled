@@ -80,6 +80,8 @@ me-distilled wizard
 -> 快速测试
 ```
 
+任意阶段都可以按 `Ctrl+C` 中断。已完成的文件会保留在当前 `runs/<run-name>`、`.cache/me-distilled`、`base_models` 等目录中，之后可以用 `--resume` 或重新运行同一命令继续。
+
 常用参数：
 
 ```bash
