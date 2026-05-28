@@ -1,48 +1,70 @@
 # Me-Distilled
 
-本项目提供一个本地优先的命令行流水线，把已授权的微信聊天记录处理成中文聊天风格训练数据，完成 LoRA 微调、GGUF adapter 转换、Ollama 部署和可选 Web 聊天前端。
+Me-Distilled is a local-first CLI pipeline for building a personal Chinese chat-style model from authorized WeChat chat records. It helps you decrypt and export local WeChat data, build training datasets, fine-tune a LoRA adapter, convert the adapter to GGUF, and create an Ollama model for local inference.
 
-## 你需要准备
+The project is designed for personal research and experimentation. Only process data that you own or have explicit permission to use.
 
+## Features
+
+- Scan local WeChat data directories and decrypted database folders.
+- Prefer WDecipher/PyWxDump for automatic WeChat database decryption, with WeChatMsg as a fallback.
+- Export selected one-to-one conversations from decrypted WeChat databases.
+- Build chat-style supervised fine-tuning data with text and optional emoji/sticker handling.
+- Train a Qwen-style LoRA adapter locally.
+- Convert the adapter to GGUF and create an Ollama model.
+- Optionally prepare a small local web chat frontend.
+
+## Requirements
+
+- Windows is recommended for WeChat decryption.
 - Python 3.10+
 - Git
 - Ollama
-- 如需训练 7B LoRA，建议 NVIDIA GPU 和 CUDA 环境
-- 已授权的微信聊天记录
+- NVIDIA GPU + CUDA environment if you plan to train a 7B LoRA locally
+- Authorized WeChat chat records
 
-CLI 会自动下载开源工具和模型，优先使用国内可用源，失败后切换备用源。微信数据库会优先尝试自动扫描目录、打开微信、读取运行中微信的 key 并解密；如果版本、权限或登录状态不满足要求，再自动打开 WeChatMsg 图形界面作为兜底。
-
-## 安装
+## Install
 
 ```bash
-git clone <your-repo-url>
-cd Me-Distilled
+git clone https://github.com/ccdepsilon/me-distilled.git
+cd me-distilled
 python -m pip install -e .
 me-distilled setup deps --kind cli
 ```
 
-训练依赖：
+Install training dependencies only when you are ready to train:
 
 ```bash
 me-distilled setup deps --kind train
 ```
 
-## 一站式向导
+## Quick Start
+
+Run the interactive wizard:
 
 ```bash
 me-distilled wizard
 ```
 
-向导会依次完成：
+The wizard will guide you through:
 
 ```text
-授权确认 -> 环境检查 -> 扫描微信目录 -> 自动打开/提醒打开低版本微信 -> 自动解密或图形兜底
--> 选择联系人 -> 导出聊天 -> 处理表情资源 -> 构建训练数据
--> 下载基座模型 -> LoRA 训练 -> adapter 转 GGUF
--> 创建 Ollama 模型 -> 快速测试 -> 可选启动 Web 前端
+authorization check
+-> environment check
+-> WeChat directory scan
+-> database decrypt/check
+-> contact selection
+-> chat export
+-> optional emoji/sticker resource processing
+-> dataset build
+-> model download/check
+-> LoRA training
+-> GGUF adapter conversion
+-> Ollama model creation
+-> quick test
 ```
 
-常用参数：
+Common options:
 
 ```bash
 me-distilled wizard --run my-run
@@ -53,68 +75,60 @@ me-distilled wizard --no-sticker
 me-distilled wizard --data-mode text-emoji-tag
 ```
 
-如果要加入身份问答增强：
+If you want to add a small number of identity Q&A examples:
 
 ```bash
 me-distilled wizard \
-  --identity-answer "我是某某" \
-  --identity-answer "别装，你不知道我是谁？"
+  --identity-answer "I am <your answer>" \
+  --identity-answer "<another answer>"
 ```
 
-## 分步命令
+## Data Modes
 
-检查环境：
+The wizard currently offers three data modes:
+
+- `text-emoji-tag`: recommended. Training data keeps emoji as semantic tags, for example `<emoji:smile>`. A frontend can later map the tag to a Unicode emoji or image.
+- `text-emoji`: stores Unicode emoji directly in the training text.
+- `sticker`: experimental. Stores custom sticker tags such as `<sticker:desc>` directly in the main chat model data.
+
+For most users, `text-emoji-tag` is the safest default. Custom sticker sending is easier to control outside the main chat model with a separate selector or frontend rule.
+
+## Useful Commands
+
+Check the environment:
 
 ```bash
 me-distilled doctor
 ```
 
-下载工具：
+Install tools and dependencies:
 
 ```bash
+me-distilled setup deps --kind cli
+me-distilled setup deps --kind train
 me-distilled setup tools --all
-```
-
-下载模型：
-
-```bash
 me-distilled setup models --all
 ```
 
-辅助解密：
+Work with WeChat databases:
 
 ```bash
 me-distilled wechat scan
 me-distilled wechat locate
 me-distilled wechat auto-decrypt
-me-distilled wechat wdecipher
 me-distilled wechat check --decrypted ./wechat_decrypted
 ```
 
-`wechat scan` 会自动扫描注册表/配置文件中的微信存储位置、默认文档目录下的微信账号目录、`FileStorage/CustomEmotion` 表情目录，以及项目内常见的已解密数据库目录。
+`wechat auto-decrypt` first tries WDecipher/PyWxDump against the running WeChat process. If that fails, it tries WeChatMsg automatic decryption, then falls back to opening the WeChatMsg GUI.
 
-`wechat locate` 会在微信已经打开并登录时，优先用 WDecipher/PyWxDump 读取运行中的微信进程信息，打印 `wxid`、微信版本、`filePath` 和目录候选；如果 WDecipher 失败，再切换到 WeChatMsg 备用读取。
-
-`wechat auto-decrypt` 会先提醒用户安装/打开 PC 微信并同步聊天记录，然后优先使用 WDecipher/PyWxDump 读取 `wx_dir/db_key` 并解密数据库；如果 WDecipher 失败，再切换到 WeChatMsg 自动解密，最后才打开 WeChatMsg 图形界面兜底。
-
-`wechat wdecipher` 可以显式使用 WDecipher/PyWxDump 解密方式，适合运行中的微信可通过内存搜索拿到 `db_key` 的情况。
-
-自动解密优先依赖 WDecipher/PyWxDump 的运行中微信读取能力；WeChatMsg 作为备用方案时，支持版本以其自带的 `version_list.json` 为准。旧版微信和新版微信可能使用不同的聊天记录目录，所以换版本后需要在目标版本微信里重新同步聊天记录。
-
-手动兜底：
-
-```bash
-me-distilled wechat decrypt
-```
-
-联系人匹配和导出：
+Match contacts and export chats:
 
 ```bash
 me-distilled wechat match --decrypted ./wechat_decrypted --contacts ./contacts.txt
 me-distilled wechat export --run my-run --decrypted ./wechat_decrypted --contacts ./contacts.txt
 ```
 
-构建训练数据：
+Build training data:
 
 ```bash
 me-distilled data build \
@@ -124,7 +138,7 @@ me-distilled data build \
   --mode text-emoji-tag
 ```
 
-训练、转换和部署：
+Train, convert, and deploy with Ollama:
 
 ```bash
 me-distilled train lora --run my-run
@@ -133,13 +147,17 @@ me-distilled ollama create --run my-run --name me-distilled
 me-distilled ollama test --model me-distilled
 ```
 
-Web 前端：
+Optional local web frontend:
 
 ```bash
 me-distilled web prepare --run my-run
 me-distilled web start --model me-distilled --port 3000
 ```
 
-## 隐私说明
+## Privacy
 
-`.gitignore` 默认排除了聊天记录、解密数据库、表情包、模型权重、训练产物和运行目录。不要把私人数据或模型权重提交到公开仓库。
+Generated chat exports, decrypted databases, sticker assets, model weights, and run artifacts are ignored by Git by default. Do not commit private chat data, decrypted databases, sticker files, or model weights to a public repository.
+
+## Disclaimer
+
+This project is for local research and learning. Respect platform terms, local laws, and the privacy of other people in your conversations.

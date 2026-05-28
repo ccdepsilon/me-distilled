@@ -1,7 +1,7 @@
 [project]
-name = "me-distilled-cli"
+name = "me-distilled"
 version = "0.1.0"
-description = "Local CLI pipeline for building a personal WeChat style LoRA model."
+description = "Local-first CLI pipeline for building a personal Chinese chat-style LoRA model."
 requires-python = ">=3.10"
 dependencies = [
   "rich>=13.9.4,<15",

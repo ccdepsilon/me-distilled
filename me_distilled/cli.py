@@ -1667,7 +1667,7 @@ def wizard(args: argparse.Namespace) -> None:
     mark(run_dir, state, "deps_checked")
 
     out(
-        "\n微信提示：建议先打开并登录 PC 微信，确认聊天记录已同步。工具会优先尝试 WDecipher 自动解密，失败后再用 WeChatMsg 兜底。新版/旧版微信数据可能分开存储，切版本后要确认聊天记录已同步。",
+        "\n微信提示：请先打开并登录 PC 微信，确认目标聊天记录已经同步。本工具会优先使用 WDecipher 自动解密，失败后再切换到 WeChatMsg 兜底。",
         "yellow",
     )
     accounts, decrypted_candidates = print_wechat_scan()
@@ -1746,19 +1746,30 @@ def wizard(args: argparse.Namespace) -> None:
             return
         command_wechat_export(argparse.Namespace(run=str(run_dir), resume="", decrypted=str(decrypted), contacts=str(contacts_file), groups=""))
 
-    use_stickers = not args.no_sticker and prompt_yes("是否处理本地表情包资源？", True, auto_yes=args.yes)
+    use_stickers = not args.no_sticker and prompt_yes(
+        "是否导出本地自定义表情资源？用于前端映射或后续 sticker selector；跳过也可以训练文本模型。",
+        True,
+        auto_yes=args.yes,
+    )
     if use_stickers and choice != 3:
         account_paths = [item["path"] for item in accounts] or find_wechat_files()
         wechat_files = choose_path_from_candidates("选择微信 Files 账号目录", account_paths, None, auto_yes=args.yes)
         command_sticker_export(argparse.Namespace(run=str(run_dir), resume="", decrypted=str(decrypted), wechat_files=wechat_files))
         command_sticker_map(argparse.Namespace(run=str(run_dir), resume="", decrypted=str(decrypted)))
 
-    mode = args.data_mode or ["text-emoji-tag", "text-emoji", "sticker"][prompt_choice(
-        "训练数据类型",
-        ["文本 + <emoji:描述> 标签（推荐，前端可映射 emoji）", "文本 + Unicode emoji", "文本 + sticker 标签"],
-        1,
-        auto_yes=args.yes,
-    ) - 1]
+    mode = args.data_mode or ["text-emoji-tag", "text-emoji", "sticker"][
+        prompt_choice(
+            "训练数据类型",
+            [
+                "推荐：文本 + <emoji:描述> 标签，前端可稳定映射 emoji",
+                "文本 + Unicode emoji，直接把 emoji 字符写入训练文本",
+                "实验性：文本 + <sticker:描述> 标签，把自定义表情放进主模型",
+            ],
+            1,
+            auto_yes=args.yes,
+        )
+        - 1
+    ]
     identity_answers = args.identity_answer or []
     command_data_build(
         argparse.Namespace(
@@ -1820,13 +1831,13 @@ def wizard(args: argparse.Namespace) -> None:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="me-distilled", description="本地微信聊天风格模型训练与 Ollama 部署 CLI")
+    parser = argparse.ArgumentParser(prog="me-distilled", description="本地中文聊天风格模型训练与 Ollama 部署 CLI")
     sub = parser.add_subparsers(dest="command", required=True)
 
     p = sub.add_parser("doctor", help="检查 Python/Git/Ollama/GPU/依赖")
     p.set_defaults(func=command_doctor)
 
-    p = sub.add_parser("wizard", help="从微信数据到 Ollama/Web 的一站式向导")
+    p = sub.add_parser("wizard", help="交互式完成数据导出、训练和 Ollama 部署")
     p.add_argument("--run")
     p.add_argument("--resume")
     p.add_argument("--yes", action="store_true", help="使用默认选项，适合自动化")
