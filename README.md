@@ -1,6 +1,6 @@
 # Me-Distilled
 
-Me-Distilled 是一个本地优先的命令行工具，用于把已授权的微信聊天记录处理成中文聊天风格训练数据，并完成 LoRA 微调、GGUF adapter 转换和 Ollama 本地部署。
+Me-Distilled 是一个本地优先的命令行工具，用于把已授权的微信聊天记录处理成中文聊天风格训练数据，并完成 LoRA 微调、GGUF adapter 转换和 Ollama 本地部署。转换后的模型可以在本地无 GPU 推理；训练 LoRA 通常需要 NVIDIA GPU 和 CUDA 环境。
 
 本项目适合个人研究、学习和本地实验。请只处理你本人拥有或已获得明确授权的数据。
 
@@ -36,7 +36,7 @@ Me-Distilled 是一个本地优先的命令行工具，用于把已授权的微�
 - Python 3.10+
 - Git
 - Ollama
-- 如需本地训练 7B LoRA，建议准备 NVIDIA GPU 和 CUDA 环境。
+- 本地推理可无 GPU 运行；如需本地训练 7B LoRA，建议准备 NVIDIA GPU 和 CUDA 环境。
 - 已授权的微信聊天记录。
 
 ## 安装
