@@ -105,9 +105,9 @@ me-distilled wizard \
 
 - `text-emoji-tag`：推荐。把 emoji 写成语义标签，例如 `<emoji:微笑>`，后续前端可以稳定映射成 Unicode emoji 或图片。
 - `text-emoji`：直接把 Unicode emoji 写入训练文本。
-- `sticker`：实验性。把自定义表情包写成 `<sticker:描述>` 标签并放入主聊天模型训练数据。
+- `sticker`：实验性。把自定义表情包写成 `<sticker:描述>` 标签并放入主聊天模型训练数据。后续模型会按这个格式输出标签；Ollama 终端只会显示标签文本，不能直接渲染图片，需要使用 Web 前端把标签映射成本地 gif/png。
 
-大多数情况下推荐使用 `text-emoji-tag`。自定义表情包更适合通过单独的 selector 或前端规则控制，不一定要直接放进主聊天模型。
+大多数情况下推荐使用 `text-emoji-tag`。如果选择 `sticker` 模式，建议同时启用 Web 前端，否则你在 Ollama 里看到的会是 `<sticker:描述>` 文本。
 
 ## 常用命令
 
@@ -176,12 +176,14 @@ me-distilled ollama create --run my-run --name me-distilled
 me-distilled ollama test --model me-distilled
 ```
 
-可选本地 Web 前端：
+本地 Web 前端：
 
 ```bash
 me-distilled web prepare --run my-run
 me-distilled web start --model me-distilled --port 3000
 ```
+
+向导默认会询问并推荐启动 Web 前端。使用 `sticker` 模式时，Web 前端负责把 `<sticker:描述>` 映射成本地表情包图片；Ollama CLI 不会直接显示图片。
 
 ## Agent Skill
 

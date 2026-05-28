@@ -1763,7 +1763,7 @@ def wizard(args: argparse.Namespace) -> None:
             [
                 "推荐：文本 + <emoji:描述> 标签，前端可稳定映射 emoji",
                 "文本 + Unicode emoji，直接把 emoji 字符写入训练文本",
-                "实验性：文本 + <sticker:描述> 标签，把自定义表情放进主模型",
+                "实验性：文本 + <sticker:描述> 标签；Ollama 只显示标签，Web 前端可映射图片",
             ],
             1,
             auto_yes=args.yes,
@@ -1814,7 +1814,10 @@ def wizard(args: argparse.Namespace) -> None:
     model_name = args.ollama_name
     command_ollama_create(argparse.Namespace(run=str(run_dir), resume="", base_gguf=args.base_gguf or "", adapter="", name=model_name))
     command_ollama_test(argparse.Namespace(model=model_name, prompt=[], temperature=0.2))
-    if prompt_yes("是否准备并启动本地 Web 聊天前端？", True, auto_yes=args.yes):
+    web_hint = "是否准备并启动本地 Web 聊天前端？"
+    if mode == "sticker":
+        web_hint = "已选择 sticker 模式，建议启动 Web 前端以显示表情包图片。是否启动？"
+    if prompt_yes(web_hint, True, auto_yes=args.yes):
         command_web_prepare(argparse.Namespace(run=str(run_dir), resume="", web_dir=str(ROOT / "web-chat")))
         out("前端启动会占用当前终端；需要后台运行可用 pm2 或另开终端。", "yellow")
         command_web_start(
