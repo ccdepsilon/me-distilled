@@ -896,6 +896,12 @@ def supported_wechat_version_summary(version_list: Any) -> str:
     return f"{versions[0]} - {versions[-1]}（共 {len(versions)} 个版本号）"
 
 
+def read_wechat_runtime_info(get_wx_info: Any, version_list: Any) -> Any:
+    if hasattr(get_wx_info, "read_info"):
+        return get_wx_info.read_info(version_list, False)
+    return get_wx_info.get_info(version_list)
+
+
 def choose_wechat_info(infos: Any, wxid_hint: str = "") -> dict[str, Any]:
     if isinstance(infos, int):
         messages = {
@@ -918,6 +924,125 @@ def choose_wechat_info(infos: Any, wxid_hint: str = "") -> dict[str, Any]:
         if len(key) == 64 and wxid and wxid != "None":
             return item
     raise RuntimeError("读取到了微信进程，但没有拿到可用 key。请确认微信已登录、版本受支持，必要时用管理员权限运行终端。")
+
+
+def normalize_wechat_infos(infos: Any) -> list[dict[str, Any]]:
+    if isinstance(infos, int):
+        messages = {
+            -1: "没有检测到正在运行的微信。请先打开并登录低版本微信。",
+            -2: "微信版本不匹配。",
+            -3: "没有找到 WeChatWin.dll。",
+            -10086: "未知错误。",
+        }
+        raise RuntimeError(messages.get(infos, f"获取微信信息失败：{infos}"))
+    if isinstance(infos, str):
+        raise RuntimeError(f"当前微信版本可能不支持自动读取信息：{infos}")
+    if isinstance(infos, dict):
+        return [infos]
+    if isinstance(infos, list):
+        return [item for item in infos if isinstance(item, dict)]
+    raise RuntimeError("没有读取到微信账号信息。")
+
+
+def candidate_wechat_account_paths(info: dict[str, Any], accounts: list[dict[str, Any]] | None = None) -> list[Path]:
+    wxid = str(info.get("wxid") or "").strip()
+    raw_file_path = str(info.get("filePath") or "").strip()
+    candidates: list[Path] = []
+    seen: set[str] = set()
+
+    def add(path: Path | str | None) -> None:
+        if not path:
+            return
+        item = Path(path).expanduser()
+        key = str(item).lower()
+        if key not in seen:
+            seen.add(key)
+            candidates.append(item)
+
+    if raw_file_path and raw_file_path.lower() != "none":
+        raw = Path(os.path.expandvars(raw_file_path)).expanduser()
+        add(raw)
+        if wxid and raw.name.lower() != wxid.lower():
+            add(raw / wxid)
+            add(raw / "WeChat Files" / wxid)
+        if wxid:
+            add(raw.parent / wxid)
+
+    if wxid:
+        for root in wechat_storage_roots():
+            add(root / wxid)
+        for account in accounts or scan_wechat_accounts():
+            path = account.get("path")
+            if path and (Path(path).name.lower() == wxid.lower() or account.get("account") == wxid):
+                add(path)
+
+    existing = [path for path in candidates if path.exists()]
+    missing = [path for path in candidates if not path.exists()]
+    return existing + missing
+
+
+def command_wechat_locate(args: argparse.Namespace) -> None:
+    if not is_windows():
+        out("直接读取微信运行信息目前只支持 Windows。", "red")
+        raise SystemExit(1)
+
+    heading(
+        "直接获取微信目录",
+        "请先打开并登录低版本 PC 微信，等待聊天记录同步完成。此命令会直接读取运行中微信的 wxid 和 filePath。",
+    )
+    accounts, _ = print_wechat_scan()
+    if not wechat_processes() and args.open_wechat:
+        open_wechat_if_possible()
+    if not wechat_processes() and not args.yes:
+        input("请打开并登录微信，确认聊天记录已同步后按回车继续...")
+
+    tool = Path(args.tool) if args.tool else ensure_wechatmsg()
+    req = tool / "requirements.txt"
+    if req.exists() and args.install_deps:
+        run_command([sys.executable, "-m", "pip", "install", "-r", str(req)], cwd=tool)
+
+    get_wx_info, _wx_decrypt, version_list = load_wechatmsg_modules(tool)
+    version_summary = supported_wechat_version_summary(version_list)
+    if version_summary:
+        out(f"WeChatMsg 当前版本表: {version_summary}", "cyan")
+    try:
+        rows = normalize_wechat_infos(read_wechat_runtime_info(get_wx_info, version_list))
+    except Exception as exc:
+        out(f"直接读取运行中微信失败：{exc}", "red")
+        if accounts:
+            out("已扫描到以下账号目录，可先手动指定 --wechat-files 或换受支持微信版本后重试：", "yellow")
+            for item in accounts:
+                out(f"  - {item['path']}")
+        else:
+            try:
+                root = get_wx_info.get_info_filePath("all")
+                if root and root != "None":
+                    out(f"WeChatMsg 静态推导的 WeChat Files 目录: {root}", "yellow")
+            except Exception:
+                pass
+        raise SystemExit(1)
+    if args.wxid:
+        rows = [item for item in rows if str(item.get("wxid") or "") == args.wxid]
+    if not rows:
+        out("没有匹配到微信账号信息。", "red")
+        raise SystemExit(1)
+
+    for idx, info in enumerate(rows, 1):
+        out(f"\n账号 {idx}", "bold")
+        out(f"  pid: {info.get('pid')}")
+        out(f"  version: {info.get('version')}")
+        out(f"  wxid: {info.get('wxid')}")
+        out(f"  account: {info.get('account')}")
+        out(f"  filePath: {info.get('filePath')}")
+        out(f"  key: {'OK' if len(str(info.get('key') or '')) == 64 else 'missing'}")
+        candidates = candidate_wechat_account_paths(info, accounts)
+        if candidates:
+            out("  目录候选：")
+            for path in candidates:
+                mark = "OK" if (path / "Msg").exists() else ("exists" if path.exists() else "missing")
+                out(f"    [{mark}] {path}")
+        else:
+            out("  没有推导出目录候选。", "yellow")
 
 
 def command_wechat_auto_decrypt(args: argparse.Namespace) -> None:
@@ -948,13 +1073,15 @@ def command_wechat_auto_decrypt(args: argparse.Namespace) -> None:
         version_summary = supported_wechat_version_summary(version_list)
         if version_summary:
             out(f"WeChatMsg 当前版本表: {version_summary}", "cyan")
-        info = choose_wechat_info(get_wx_info.get_info(version_list), args.wxid)
+        info = choose_wechat_info(read_wechat_runtime_info(get_wx_info, version_list), args.wxid)
         out(f"检测到微信账号: wxid={info.get('wxid')} version={info.get('version')} pid={info.get('pid')}", "green")
-        wechat_files = Path(args.wechat_files) if args.wechat_files else Path(str(info.get("filePath") or ""))
-        if not wechat_files.exists() and accounts:
-            candidates = [item["path"] for item in accounts]
-            if args.wxid:
-                candidates.sort(key=lambda path: path.name == args.wxid, reverse=True)
+        candidates = candidate_wechat_account_paths(info, accounts)
+        if args.wechat_files:
+            wechat_files = Path(args.wechat_files)
+        else:
+            existing_msg_dirs = [path for path in candidates if (path / "Msg").exists()]
+            wechat_files = existing_msg_dirs[0] if existing_msg_dirs else Path(str(info.get("filePath") or ""))
+        if not (wechat_files / "Msg").exists() and candidates:
             wechat_files = choose_path_from_candidates("选择微信账号目录", candidates, None, auto_yes=args.yes)
         db_dir = wechat_files / "Msg"
         if not db_dir.exists():
@@ -1546,6 +1673,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     wechat = sub.add_parser("wechat", help="微信数据库解密辅助、检查、导出")
     wechat_sub = wechat.add_subparsers(dest="wechat_command", required=True)
+    p = wechat_sub.add_parser("locate")
+    p.add_argument("--tool", default="")
+    p.add_argument("--wxid", default="")
+    p.add_argument("--install-deps", action=argparse.BooleanOptionalAction, default=True)
+    p.add_argument("--open-wechat", action=argparse.BooleanOptionalAction, default=True)
+    p.add_argument("--yes", action="store_true")
+    p.set_defaults(func=command_wechat_locate)
     p = wechat_sub.add_parser("scan")
     p.set_defaults(func=command_wechat_scan)
     p = wechat_sub.add_parser("auto-decrypt")
