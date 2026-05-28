@@ -6,6 +6,7 @@ import importlib.util
 import json
 import os
 import platform
+import re
 import shutil
 import sqlite3
 import subprocess
@@ -249,6 +250,10 @@ def install_requirements(path: Path) -> None:
         out(f"未找到依赖文件: {path}", "red")
         raise SystemExit(1)
     run_command([sys.executable, "-m", "pip", "install", "-r", str(path)])
+
+
+def install_python_packages(packages: list[str]) -> None:
+    run_command([sys.executable, "-m", "pip", "install", *packages])
 
 
 def clone_with_fallback(urls: list[str], target: Path, name: str) -> Path:
@@ -718,6 +723,17 @@ def ensure_wechatmsg() -> Path:
             return local
     raise SystemExit(last_error or 1)
 
+
+def ensure_wdecipher(install: bool = True) -> bool:
+    if module_exists("wdecipher"):
+        return True
+    if not install:
+        return False
+    out("未安装 WDecipher，正在安装备用微信数据库解密工具。", "cyan")
+    install_python_packages(["wdecipher==0.0.1", "pycryptodomex>=3.20.0", "loguru>=0.7.3"])
+    return module_exists("wdecipher")
+
+
 def ensure_llama_cpp() -> Path:
     path = clone_with_fallback(LLAMA_CPP_URLS, TOOLS_CACHE / "llama.cpp", "llama.cpp")
     req = path / "requirements.txt"
@@ -836,7 +852,7 @@ def command_setup_models(args: argparse.Namespace) -> None:
 
 
 def command_wechat_decrypt(args: argparse.Namespace) -> None:
-    tool = Path(args.tool) if args.tool else ensure_wechatmsg()
+    tool = Path(args.tool).resolve() if args.tool else ensure_wechatmsg().resolve()
     accounts, decrypted_dirs = print_wechat_scan()
     if decrypted_dirs:
         out("已经发现可用的解密目录；如果这些目录是最新的，可以直接跳过解密并运行 wechat check / wizard。", "green")
@@ -871,6 +887,18 @@ def load_wechatmsg_modules(tool: Path):
         raise RuntimeError(f"未找到 version_list.json：{version_path}")
     version_list = json.loads(version_path.read_text(encoding="utf-8"))
     return get_wx_info, wx_decrypt, version_list
+
+
+def load_wechatmsg_modules_with_optional_install(tool: Path, install: bool = True):
+    try:
+        return load_wechatmsg_modules(tool)
+    except Exception:
+        req = tool / "requirements.txt"
+        if install and req.exists():
+            out("WeChatMsg 依赖缺失，正在安装后重试。", "cyan")
+            run_command([sys.executable, "-m", "pip", "install", "-r", str(req)], cwd=tool)
+            return load_wechatmsg_modules(tool)
+        raise
 
 
 def supported_wechat_version_summary(version_list: Any) -> str:
@@ -944,6 +972,110 @@ def normalize_wechat_infos(infos: Any) -> list[dict[str, Any]]:
     raise RuntimeError("没有读取到微信账号信息。")
 
 
+def collect_wechat_db_files(wx_dir: Path) -> list[dict[str, str]]:
+    msg_dir = wx_dir / "Msg"
+    if not msg_dir.exists():
+        raise RuntimeError(f"未找到 Msg 目录：{msg_dir}")
+    rows: list[dict[str, str]] = []
+    for path in sorted(msg_dir.rglob("*.db")):
+        db_type = re.sub(r"\d*\.db$", "", path.name, flags=re.IGNORECASE)
+        rows.append({"type": db_type, "path": str(path)})
+    if not rows:
+        raise RuntimeError(f"没有在 {msg_dir} 下找到微信数据库。")
+    return rows
+
+
+def normalize_wdecipher_output(raw_dir: Path, out_dir: Path) -> None:
+    out_dir.mkdir(parents=True, exist_ok=True)
+    multi_dir = out_dir / "Multi"
+    multi_dir.mkdir(parents=True, exist_ok=True)
+    multi_pattern = re.compile(r"^(MSG|FTSMSG|MediaMSG)\d*\.db$", re.IGNORECASE)
+    for src in sorted(raw_dir.glob("*.db")):
+        name = src.name if src.name.startswith("de_") else f"de_{src.name}"
+        dest = multi_dir / name if multi_pattern.match(src.name) else out_dir / name
+        if src.resolve() != dest.resolve():
+            shutil.copy2(src, dest)
+
+
+def read_wdecipher_infos(install: bool = True) -> list[dict[str, Any]]:
+    if not is_windows():
+        raise RuntimeError("WDecipher 备用读取目前只支持 Windows。")
+    if not ensure_wdecipher(install):
+        raise RuntimeError("未安装 WDecipher。")
+    from wdecipher import get_wx_infos
+
+    rows = get_wx_infos()
+    if not rows:
+        raise RuntimeError("WDecipher 没有读取到运行中的微信账号。")
+    return [dict(item) for item in rows]
+
+
+def choose_wdecipher_info(rows: list[dict[str, Any]], wxid_hint: str = "", wechat_files: str = "") -> dict[str, Any]:
+    candidates = rows[:]
+    if wxid_hint:
+        candidates.sort(key=lambda item: str(item.get("wxid") or "") == wxid_hint, reverse=True)
+    if wechat_files:
+        expected = str(Path(wechat_files)).lower()
+        candidates.sort(key=lambda item: str(item.get("wx_dir") or "").lower() == expected, reverse=True)
+    for item in candidates:
+        key = str(item.get("db_key") or "")
+        wx_dir = str(item.get("wx_dir") or "")
+        if len(key) == 64 and wx_dir and wx_dir.lower() != "none":
+            return item
+    raise RuntimeError("WDecipher 读取到了微信进程，但没有拿到可用 db_key 或 wx_dir。")
+
+
+def print_wdecipher_infos(rows: list[dict[str, Any]], accounts: list[dict[str, Any]] | None = None) -> None:
+    for idx, info in enumerate(rows, 1):
+        wx_dir = Path(str(info.get("wx_dir") or ""))
+        out(f"\nWDecipher 账号 {idx}", "bold")
+        out(f"  pid: {info.get('pid')}")
+        out(f"  version: {info.get('version')}")
+        out(f"  wxid: {info.get('wxid')}")
+        out(f"  wx_dir: {wx_dir}")
+        out(f"  key: {'OK' if len(str(info.get('db_key') or '')) == 64 else 'missing'}")
+        candidates = candidate_wechat_account_paths(
+            {"wxid": info.get("wxid"), "filePath": info.get("wx_dir")},
+            accounts or [],
+        )
+        if wx_dir.exists() and wx_dir not in candidates:
+            candidates.insert(0, wx_dir)
+        if candidates:
+            out("  目录候选：")
+            for path in candidates:
+                mark = "OK" if (path / "Msg").exists() else ("exists" if path.exists() else "missing")
+                out(f"    [{mark}] {path}")
+
+
+def decrypt_with_wdecipher(
+    out_dir: Path,
+    wechat_files: str = "",
+    wxid: str = "",
+    install: bool = True,
+) -> Path:
+    rows = read_wdecipher_infos(install=install)
+    info = choose_wdecipher_info(rows, wxid_hint=wxid, wechat_files=wechat_files)
+    wx_dir = Path(wechat_files or str(info.get("wx_dir") or "")).expanduser()
+    if not (wx_dir / "Msg").exists():
+        candidates = candidate_wechat_account_paths({"wxid": info.get("wxid"), "filePath": info.get("wx_dir")})
+        existing = [path for path in candidates if (path / "Msg").exists()]
+        if existing:
+            wx_dir = existing[0]
+    dbs = collect_wechat_db_files(wx_dir)
+    raw_dir = out_dir / "_wdecipher_raw"
+    raw_dir.mkdir(parents=True, exist_ok=True)
+
+    from wdecipher import batch_decrypt_wx_db
+
+    out(f"WDecipher 正在解密数据库：{wx_dir}", "cyan")
+    batch_decrypt_wx_db(str(info["db_key"]), dbs, str(raw_dir), merge_db=False, verbose=True)
+    normalize_wdecipher_output(raw_dir, out_dir)
+    result = check_db(out_dir)
+    if not result["ok"]:
+        raise RuntimeError(f"WDecipher 解密完成但检查未通过：{out_dir}")
+    return out_dir
+
+
 def candidate_wechat_account_paths(info: dict[str, Any], accounts: list[dict[str, Any]] | None = None) -> list[Path]:
     wxid = str(info.get("wxid") or "").strip()
     raw_file_path = str(info.get("filePath") or "").strip()
@@ -996,12 +1128,8 @@ def command_wechat_locate(args: argparse.Namespace) -> None:
     if not wechat_processes() and not args.yes:
         input("请打开并登录微信，确认聊天记录已同步后按回车继续...")
 
-    tool = Path(args.tool) if args.tool else ensure_wechatmsg()
-    req = tool / "requirements.txt"
-    if req.exists() and args.install_deps:
-        run_command([sys.executable, "-m", "pip", "install", "-r", str(req)], cwd=tool)
-
-    get_wx_info, _wx_decrypt, version_list = load_wechatmsg_modules(tool)
+    tool = Path(args.tool).resolve() if args.tool else ensure_wechatmsg().resolve()
+    get_wx_info, _wx_decrypt, version_list = load_wechatmsg_modules_with_optional_install(tool, args.install_deps)
     version_summary = supported_wechat_version_summary(version_list)
     if version_summary:
         out(f"WeChatMsg 当前版本表: {version_summary}", "cyan")
@@ -1009,6 +1137,14 @@ def command_wechat_locate(args: argparse.Namespace) -> None:
         rows = normalize_wechat_infos(read_wechat_runtime_info(get_wx_info, version_list))
     except Exception as exc:
         out(f"直接读取运行中微信失败：{exc}", "red")
+        if args.fallback_wdecipher:
+            try:
+                out("切换到 WDecipher/PyWxDump 备用读取方式。", "yellow")
+                wd_rows = read_wdecipher_infos(install=args.install_deps)
+                print_wdecipher_infos(wd_rows, accounts)
+                return
+            except Exception as wd_exc:
+                out(f"WDecipher 备用读取也失败：{wd_exc}", "red")
         if accounts:
             out("已扫描到以下账号目录，可先手动指定 --wechat-files 或换受支持微信版本后重试：", "yellow")
             for item in accounts:
@@ -1045,6 +1181,30 @@ def command_wechat_locate(args: argparse.Namespace) -> None:
             out("  没有推导出目录候选。", "yellow")
 
 
+def command_wechat_wdecipher(args: argparse.Namespace) -> None:
+    heading(
+        "WDecipher 备用解密",
+        "当 WeChatMsg 版本表不支持当前微信时，使用 WDecipher/PyWxDump 的内存搜索方式读取 db_key 并解密数据库。",
+    )
+    if not wechat_processes() and args.open_wechat:
+        open_wechat_if_possible()
+    if not wechat_processes() and not args.yes:
+        input("请打开并登录微信，确认聊天记录已同步后按回车继续...")
+    try:
+        out_dir = decrypt_with_wdecipher(
+            Path(args.out),
+            wechat_files=args.wechat_files,
+            wxid=args.wxid,
+            install=args.install_deps,
+        )
+        result = check_db(out_dir)
+        out(f"WDecipher 解密成功：{out_dir}", "green")
+        out(f"de_MSG*.db: {len(result['msg_dbs'])}", "green")
+    except Exception as exc:
+        out(f"WDecipher 解密失败：{exc}", "red")
+        raise SystemExit(1)
+
+
 def command_wechat_auto_decrypt(args: argparse.Namespace) -> None:
     if not is_windows():
         out("自动读取微信进程 key 目前只支持 Windows。", "red")
@@ -1063,13 +1223,9 @@ def command_wechat_auto_decrypt(args: argparse.Namespace) -> None:
         if not args.yes:
             input("请确认微信已打开、已登录、聊天记录已同步后按回车继续...")
 
-    tool = Path(args.tool) if args.tool else ensure_wechatmsg()
-    req = tool / "requirements.txt"
-    if req.exists() and args.install_deps:
-        run_command([sys.executable, "-m", "pip", "install", "-r", str(req)], cwd=tool)
-
+    tool = Path(args.tool).resolve() if args.tool else ensure_wechatmsg().resolve()
     try:
-        get_wx_info, wx_decrypt, version_list = load_wechatmsg_modules(tool)
+        get_wx_info, wx_decrypt, version_list = load_wechatmsg_modules_with_optional_install(tool, args.install_deps)
         version_summary = supported_wechat_version_summary(version_list)
         if version_summary:
             out(f"WeChatMsg 当前版本表: {version_summary}", "cyan")
@@ -1098,6 +1254,21 @@ def command_wechat_auto_decrypt(args: argparse.Namespace) -> None:
         out(f"de_MSG*.db: {len(result['msg_dbs'])}", "green")
     except Exception as exc:
         out(f"自动解密失败：{exc}", "red")
+        if args.fallback_wdecipher:
+            try:
+                out("尝试 WDecipher/PyWxDump 备用解密。", "yellow")
+                out_dir = decrypt_with_wdecipher(
+                    Path(args.out or ROOT / "wechat_decrypted"),
+                    wechat_files=args.wechat_files,
+                    wxid=args.wxid,
+                    install=args.install_deps,
+                )
+                result = check_db(out_dir)
+                out(f"WDecipher 备用解密成功：{out_dir}", "green")
+                out(f"de_MSG*.db: {len(result['msg_dbs'])}", "green")
+                return
+            except Exception as wd_exc:
+                out(f"WDecipher 备用解密失败：{wd_exc}", "red")
         if args.fallback_gui:
             out("改为打开 WeChatMsg 图形界面兜底。", "yellow")
             command_wechat_decrypt(argparse.Namespace(tool=str(tool), yes=args.yes))
@@ -1513,6 +1684,7 @@ def wizard(args: argparse.Namespace) -> None:
                     wechat_files="",
                     wxid="",
                     install_deps=True,
+                    fallback_wdecipher=True,
                     fallback_gui=True,
                     yes=args.yes,
                 )
@@ -1678,6 +1850,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--wxid", default="")
     p.add_argument("--install-deps", action=argparse.BooleanOptionalAction, default=True)
     p.add_argument("--open-wechat", action=argparse.BooleanOptionalAction, default=True)
+    p.add_argument("--fallback-wdecipher", action=argparse.BooleanOptionalAction, default=True)
     p.add_argument("--yes", action="store_true")
     p.set_defaults(func=command_wechat_locate)
     p = wechat_sub.add_parser("scan")
@@ -1688,9 +1861,18 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--wechat-files", default="")
     p.add_argument("--wxid", default="")
     p.add_argument("--install-deps", action=argparse.BooleanOptionalAction, default=True)
+    p.add_argument("--fallback-wdecipher", action=argparse.BooleanOptionalAction, default=True)
     p.add_argument("--no-fallback-gui", dest="fallback_gui", action="store_false")
     p.add_argument("--yes", action="store_true")
     p.set_defaults(func=command_wechat_auto_decrypt)
+    p = wechat_sub.add_parser("wdecipher")
+    p.add_argument("--out", default=str(ROOT / "wechat_decrypted"))
+    p.add_argument("--wechat-files", default="")
+    p.add_argument("--wxid", default="")
+    p.add_argument("--install-deps", action=argparse.BooleanOptionalAction, default=True)
+    p.add_argument("--open-wechat", action=argparse.BooleanOptionalAction, default=True)
+    p.add_argument("--yes", action="store_true")
+    p.set_defaults(func=command_wechat_wdecipher)
     p = wechat_sub.add_parser("decrypt")
     p.add_argument("--tool", default="")
     p.add_argument("--yes", action="store_true")
