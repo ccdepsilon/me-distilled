@@ -209,6 +209,16 @@ def prompt_choice(question: str, options: list[str], default: int = 1, *, auto_y
     return min(max(value, 1), len(options))
 
 
+def tail_text(path: Path, lines: int = 80) -> str:
+    if not path.exists():
+        return ""
+    try:
+        data = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except Exception as exc:
+        return f"<无法读取日志 {path}: {exc}>"
+    return "\n".join(data[-lines:])
+
+
 def run_command(
     cmd: list[str],
     *,
@@ -255,6 +265,13 @@ def run_command(
             log_file.close()
     result = subprocess.CompletedProcess(cmd, returncode)
     if check and result.returncode != 0:
+        if log:
+            out(f"\n命令退出码: {result.returncode}", "red")
+            out(f"日志文件: {log}", "yellow")
+            tail = tail_text(log, 80)
+            if tail:
+                out("最近日志：", "bold")
+                print(tail)
         raise SystemExit(result.returncode)
     return result
 
@@ -1576,6 +1593,8 @@ def command_train_lora(args: argparse.Namespace) -> None:
         out("检测到 NVIDIA 环境，开始本地 LoRA 训练。", "green")
     else:
         out("未检测到 nvidia-smi。7B 本地训练可能非常慢或失败。", "yellow")
+    train_log = run_dir / "logs" / "train.log"
+    out(f"训练日志会写入: {train_log}", "cyan")
     cmd = [
         sys.executable,
         "-X",
@@ -1610,7 +1629,7 @@ def command_train_lora(args: argparse.Namespace) -> None:
         "--save_steps",
         str(args.save_steps),
     ]
-    run_command(cmd, log=run_dir / "logs" / "train.log")
+    run_command(cmd, log=train_log)
     state.paths["hf_base"] = str(base)
     state.paths["train_data"] = str(data)
     state.paths["lora"] = str(out_dir / "final_adapter")
