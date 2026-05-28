@@ -10,7 +10,7 @@
 - 如需训练 7B LoRA，建议 NVIDIA GPU 和 CUDA 环境
 - 已授权的微信聊天记录
 
-CLI 会自动下载开源工具和模型，优先使用国内可用源，失败后切换备用源。微信数据库解密仍需要用户在 WeChatMsg 界面中确认账号和导出目录。
+CLI 会自动下载开源工具和模型，优先使用国内可用源，失败后切换备用源。微信数据库会优先尝试自动扫描目录、打开微信、读取运行中微信的 key 并解密；如果版本、权限或登录状态不满足要求，再自动打开 WeChatMsg 图形界面作为兜底。
 
 ## 安装
 
@@ -36,7 +36,7 @@ me-distilled wizard
 向导会依次完成：
 
 ```text
-授权确认 -> 环境检查 -> 下载/打开 WeChatMsg -> 检查解密数据库
+授权确认 -> 环境检查 -> 扫描微信目录 -> 自动打开/提醒打开低版本微信 -> 自动解密或图形兜底
 -> 选择联系人 -> 导出聊天 -> 处理表情资源 -> 构建训练数据
 -> 下载基座模型 -> LoRA 训练 -> adapter 转 GGUF
 -> 创建 Ollama 模型 -> 快速测试 -> 可选启动 Web 前端
@@ -85,11 +85,21 @@ me-distilled setup models --all
 
 ```bash
 me-distilled wechat scan
-me-distilled wechat decrypt
+me-distilled wechat auto-decrypt
 me-distilled wechat check --decrypted ./wechat_decrypted
 ```
 
-`wechat scan` 会自动扫描默认文档目录下的微信账号目录、`FileStorage/CustomEmotion` 表情目录，以及项目内常见的已解密数据库目录。解密本身仍需要在 WeChatMsg 中确认账号和输出目录，因为它依赖微信进程密钥、登录状态、权限和微信版本。
+`wechat scan` 会自动扫描注册表/配置文件中的微信存储位置、默认文档目录下的微信账号目录、`FileStorage/CustomEmotion` 表情目录，以及项目内常见的已解密数据库目录。
+
+`wechat auto-decrypt` 会先提醒用户安装/打开支持的低版本 PC 微信并同步聊天记录，然后尝试自动读取正在运行的微信进程信息、定位账号目录并解密数据库。若微信版本、权限或登录状态导致自动解密失败，会自动打开 WeChatMsg 图形界面作为兜底。
+
+支持版本以 WeChatMsg 自带的 `version_list.json` 为准。当前工具会在运行时打印版本范围；通常建议使用 PC 微信 3.x 低版本，微信 4.x 往往无法自动读取 key。旧版微信和新版微信可能使用不同的聊天记录目录，所以换版本后需要在旧版微信里重新同步聊天记录。
+
+手动兜底：
+
+```bash
+me-distilled wechat decrypt
+```
 
 联系人匹配和导出：
 
