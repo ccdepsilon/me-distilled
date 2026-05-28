@@ -28,6 +28,7 @@ web-chat/app/sticker-map.json
 # Python
 __pycache__/
 *.py[cod]
+*.egg-info/
 .venv/
 venv/
 
