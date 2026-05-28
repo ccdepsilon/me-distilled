@@ -84,9 +84,12 @@ me-distilled setup models --all
 辅助解密：
 
 ```bash
+me-distilled wechat scan
 me-distilled wechat decrypt
 me-distilled wechat check --decrypted ./wechat_decrypted
 ```
+
+`wechat scan` 会自动扫描默认文档目录下的微信账号目录、`FileStorage/CustomEmotion` 表情目录，以及项目内常见的已解密数据库目录。解密本身仍需要在 WeChatMsg 中确认账号和输出目录，因为它依赖微信进程密钥、登录状态、权限和微信版本。
 
 联系人匹配和导出：
 
