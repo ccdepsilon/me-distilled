@@ -1142,6 +1142,14 @@ def command_wechat_locate(args: argparse.Namespace) -> None:
     if not wechat_processes() and not args.yes:
         input("请打开并登录微信，确认聊天记录已同步后按回车继续...")
 
+    try:
+        out("优先使用 WDecipher/PyWxDump 读取微信运行信息。", "cyan")
+        wd_rows = read_wdecipher_infos(install=args.install_deps)
+        print_wdecipher_infos(wd_rows, accounts)
+        return
+    except Exception as exc:
+        out(f"WDecipher 读取失败，切换到 WeChatMsg 备用方式：{exc}", "yellow")
+
     tool = Path(args.tool).resolve() if args.tool else ensure_wechatmsg().resolve()
     get_wx_info, _wx_decrypt, version_list = load_wechatmsg_modules_with_optional_install(tool, args.install_deps)
     version_summary = supported_wechat_version_summary(version_list)
@@ -1150,15 +1158,7 @@ def command_wechat_locate(args: argparse.Namespace) -> None:
     try:
         rows = normalize_wechat_infos(read_wechat_runtime_info(get_wx_info, version_list))
     except Exception as exc:
-        out(f"直接读取运行中微信失败：{exc}", "red")
-        if args.fallback_wdecipher:
-            try:
-                out("切换到 WDecipher/PyWxDump 备用读取方式。", "yellow")
-                wd_rows = read_wdecipher_infos(install=args.install_deps)
-                print_wdecipher_infos(wd_rows, accounts)
-                return
-            except Exception as wd_exc:
-                out(f"WDecipher 备用读取也失败：{wd_exc}", "red")
+        out(f"WeChatMsg 备用读取运行中微信失败：{exc}", "red")
         if accounts:
             out("已扫描到以下账号目录，可先手动指定 --wechat-files 或换受支持微信版本后重试：", "yellow")
             for item in accounts:
@@ -1197,8 +1197,8 @@ def command_wechat_locate(args: argparse.Namespace) -> None:
 
 def command_wechat_wdecipher(args: argparse.Namespace) -> None:
     heading(
-        "WDecipher 备用解密",
-        "当 WeChatMsg 版本表不支持当前微信时，使用 WDecipher/PyWxDump 的内存搜索方式读取 db_key 并解密数据库。",
+        "WDecipher 解密",
+        "使用 WDecipher/PyWxDump 的内存搜索方式读取 db_key 并解密数据库；WeChatMsg 仅作为备用方案。",
     )
     if not wechat_processes() and args.open_wechat:
         open_wechat_if_possible()
@@ -1227,7 +1227,7 @@ def command_wechat_auto_decrypt(args: argparse.Namespace) -> None:
     heading(
         "自动解密准备",
         "请先安装/打开支持的低版本 PC 微信，确认已登录，并等待聊天记录同步完成。"
-        "推荐使用 WeChatMsg 支持的 3.x 低版本；微信 4.x 通常不能自动读取 key。"
+        "优先使用 WDecipher/PyWxDump 自动读取 key；失败后再切换 WeChatMsg 备用。"
         "新版和旧版微信可能使用不同数据目录，扫描结果不对时请先在微信里确认记录是否存在。",
     )
     accounts, _ = print_wechat_scan()
@@ -1236,6 +1236,21 @@ def command_wechat_auto_decrypt(args: argparse.Namespace) -> None:
             out("没有检测到微信进程，也无法自动定位 WeChat.exe。请手动打开微信并登录。", "yellow")
         if not args.yes:
             input("请确认微信已打开、已登录、聊天记录已同步后按回车继续...")
+
+    try:
+        out("优先使用 WDecipher/PyWxDump 自动解密。", "cyan")
+        out_dir = decrypt_with_wdecipher(
+            Path(args.out or ROOT / "wechat_decrypted"),
+            wechat_files=args.wechat_files,
+            wxid=args.wxid,
+            install=args.install_deps,
+        )
+        result = check_db(out_dir)
+        out(f"WDecipher 自动解密成功：{out_dir}", "green")
+        out(f"de_MSG*.db: {len(result['msg_dbs'])}", "green")
+        return
+    except Exception as wd_exc:
+        out(f"WDecipher 自动解密失败，切换到 WeChatMsg 备用方式：{wd_exc}", "yellow")
 
     try:
         tool = Path(args.tool).resolve() if args.tool else ensure_wechatmsg().resolve()
@@ -1267,40 +1282,10 @@ def command_wechat_auto_decrypt(args: argparse.Namespace) -> None:
         out(f"自动解密成功：{out_dir}", "green")
         out(f"de_MSG*.db: {len(result['msg_dbs'])}", "green")
     except SystemExit as exc:
-        out(f"WeChatMsg 自动准备失败，准备切换备用方式。退出码: {exc.code}", "yellow")
-        if args.fallback_wdecipher:
-            try:
-                out("尝试 WDecipher/PyWxDump 备用解密。", "yellow")
-                out_dir = decrypt_with_wdecipher(
-                    Path(args.out or ROOT / "wechat_decrypted"),
-                    wechat_files=args.wechat_files,
-                    wxid=args.wxid,
-                    install=args.install_deps,
-                )
-                result = check_db(out_dir)
-                out(f"WDecipher 备用解密成功：{out_dir}", "green")
-                out(f"de_MSG*.db: {len(result['msg_dbs'])}", "green")
-                return
-            except Exception as wd_exc:
-                out(f"WDecipher 备用解密失败：{wd_exc}", "red")
+        out(f"WeChatMsg 备用解密失败。退出码: {exc.code}", "yellow")
         raise SystemExit(exc.code or 1)
     except Exception as exc:
-        out(f"自动解密失败：{exc}", "red")
-        if args.fallback_wdecipher:
-            try:
-                out("尝试 WDecipher/PyWxDump 备用解密。", "yellow")
-                out_dir = decrypt_with_wdecipher(
-                    Path(args.out or ROOT / "wechat_decrypted"),
-                    wechat_files=args.wechat_files,
-                    wxid=args.wxid,
-                    install=args.install_deps,
-                )
-                result = check_db(out_dir)
-                out(f"WDecipher 备用解密成功：{out_dir}", "green")
-                out(f"de_MSG*.db: {len(result['msg_dbs'])}", "green")
-                return
-            except Exception as wd_exc:
-                out(f"WDecipher 备用解密失败：{wd_exc}", "red")
+        out(f"WeChatMsg 备用解密失败：{exc}", "red")
         if args.fallback_gui:
             out("改为打开 WeChatMsg 图形界面兜底。", "yellow")
             command_wechat_decrypt(argparse.Namespace(tool=str(locals().get("tool") or ""), yes=args.yes))
@@ -1682,7 +1667,7 @@ def wizard(args: argparse.Namespace) -> None:
     mark(run_dir, state, "deps_checked")
 
     out(
-        "\n微信提示：建议使用能被 WeChatMsg 识别的 PC 微信数据。新版/旧版微信数据可能分开存储，切版本后要确认聊天记录已同步。",
+        "\n微信提示：建议先打开并登录 PC 微信，确认聊天记录已同步。工具会优先尝试 WDecipher 自动解密，失败后再用 WeChatMsg 兜底。新版/旧版微信数据可能分开存储，切版本后要确认聊天记录已同步。",
         "yellow",
     )
     accounts, decrypted_candidates = print_wechat_scan()
@@ -1883,7 +1868,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--wxid", default="")
     p.add_argument("--install-deps", action=argparse.BooleanOptionalAction, default=True)
     p.add_argument("--open-wechat", action=argparse.BooleanOptionalAction, default=True)
-    p.add_argument("--fallback-wdecipher", action=argparse.BooleanOptionalAction, default=True)
+    p.add_argument("--fallback-wdecipher", action=argparse.BooleanOptionalAction, default=True, help=argparse.SUPPRESS)
     p.add_argument("--yes", action="store_true")
     p.set_defaults(func=command_wechat_locate)
     p = wechat_sub.add_parser("scan")
@@ -1894,7 +1879,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--wechat-files", default="")
     p.add_argument("--wxid", default="")
     p.add_argument("--install-deps", action=argparse.BooleanOptionalAction, default=True)
-    p.add_argument("--fallback-wdecipher", action=argparse.BooleanOptionalAction, default=True)
+    p.add_argument("--fallback-wdecipher", action=argparse.BooleanOptionalAction, default=True, help=argparse.SUPPRESS)
     p.add_argument("--no-fallback-gui", dest="fallback_gui", action="store_false")
     p.add_argument("--yes", action="store_true")
     p.set_defaults(func=command_wechat_auto_decrypt)

@@ -93,13 +93,13 @@ me-distilled wechat check --decrypted ./wechat_decrypted
 
 `wechat scan` 会自动扫描注册表/配置文件中的微信存储位置、默认文档目录下的微信账号目录、`FileStorage/CustomEmotion` 表情目录，以及项目内常见的已解密数据库目录。
 
-`wechat locate` 会在微信已经打开并登录时，直接读取运行中的微信进程信息，打印 `wxid`、微信版本、WeChatMsg 支持版本范围、`filePath` 和目录候选。静态扫描找不到目录时优先用这个命令。
+`wechat locate` 会在微信已经打开并登录时，优先用 WDecipher/PyWxDump 读取运行中的微信进程信息，打印 `wxid`、微信版本、`filePath` 和目录候选；如果 WDecipher 失败，再切换到 WeChatMsg 备用读取。
 
-`wechat auto-decrypt` 会先提醒用户安装/打开支持的低版本 PC 微信并同步聊天记录，然后尝试自动读取正在运行的微信进程信息、定位账号目录并解密数据库。若 WeChatMsg 版本表不支持当前微信，会自动切换到 WDecipher/PyWxDump 备用方式读取 `wx_dir/db_key` 并解密；如果备用方式也失败，再打开 WeChatMsg 图形界面作为兜底。
+`wechat auto-decrypt` 会先提醒用户安装/打开 PC 微信并同步聊天记录，然后优先使用 WDecipher/PyWxDump 读取 `wx_dir/db_key` 并解密数据库；如果 WDecipher 失败，再切换到 WeChatMsg 自动解密，最后才打开 WeChatMsg 图形界面兜底。
 
-`wechat wdecipher` 可以显式使用 WDecipher/PyWxDump 备用解密方式，适合当前微信版本不在 WeChatMsg `version_list.json` 里，但运行中的微信仍可通过内存搜索拿到 `db_key` 的情况。
+`wechat wdecipher` 可以显式使用 WDecipher/PyWxDump 解密方式，适合运行中的微信可通过内存搜索拿到 `db_key` 的情况。
 
-支持版本以 WeChatMsg 自带的 `version_list.json` 为准。当前工具会在运行时打印版本范围；通常建议使用 PC 微信 3.x 低版本，微信 4.x 往往无法自动读取 key。旧版微信和新版微信可能使用不同的聊天记录目录，所以换版本后需要在旧版微信里重新同步聊天记录。
+自动解密优先依赖 WDecipher/PyWxDump 的运行中微信读取能力；WeChatMsg 作为备用方案时，支持版本以其自带的 `version_list.json` 为准。旧版微信和新版微信可能使用不同的聊天记录目录，所以换版本后需要在目标版本微信里重新同步聊天记录。
 
 手动兜底：
 
