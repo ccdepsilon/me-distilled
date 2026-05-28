@@ -85,11 +85,14 @@ me-distilled setup models --all
 
 ```bash
 me-distilled wechat scan
+me-distilled wechat locate
 me-distilled wechat auto-decrypt
 me-distilled wechat check --decrypted ./wechat_decrypted
 ```
 
 `wechat scan` 会自动扫描注册表/配置文件中的微信存储位置、默认文档目录下的微信账号目录、`FileStorage/CustomEmotion` 表情目录，以及项目内常见的已解密数据库目录。
+
+`wechat locate` 会在微信已经打开并登录时，直接读取运行中的微信进程信息，打印 `wxid`、微信版本、WeChatMsg 支持版本范围、`filePath` 和目录候选。静态扫描找不到目录时优先用这个命令。
 
 `wechat auto-decrypt` 会先提醒用户安装/打开支持的低版本 PC 微信并同步聊天记录，然后尝试自动读取正在运行的微信进程信息、定位账号目录并解密数据库。若微信版本、权限或登录状态导致自动解密失败，会自动打开 WeChatMsg 图形界面作为兜底。
 
