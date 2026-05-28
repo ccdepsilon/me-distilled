@@ -65,11 +65,18 @@ Use stepwise commands when debugging, resuming, or explaining each phase.
 me-distilled doctor
 ```
 
-2. Prepare or check WeChat databases:
+2. Scan, auto-decrypt, or check WeChat databases:
+
+```bash
+me-distilled wechat scan
+me-distilled wechat auto-decrypt
+me-distilled wechat check --decrypted ./wechat_decrypted
+```
+
+Use `wechat auto-decrypt` first. It locates WeChat storage from registry/config/default document paths, reminds the user to open a supported low-version PC WeChat and sync chats, reads the running process key when possible, and decrypts into `wechat_decrypted`. Supported versions come from WeChatMsg's `version_list.json`; prefer PC WeChat 3.x, and assume 4.x may not be readable. If auto-decrypt fails, use the GUI fallback:
 
 ```bash
 me-distilled wechat decrypt
-me-distilled wechat check --decrypted ./wechat_decrypted
 ```
 
 3. Match contacts and export chats:
@@ -126,7 +133,7 @@ me-distilled web start --model me-distilled --port 3000
 
 ## Failure Handling
 
-- If WeChatMsg cannot decrypt automatically, open it with `me-distilled wechat decrypt`, let the user complete the GUI step, then resume with `me-distilled wizard --resume runs/<run>`.
+- If `wechat auto-decrypt` cannot read the running WeChat key, ask the user to open/login to the supported low-version PC WeChat, sync chats, and rerun. If it still fails, open WeChatMsg with `me-distilled wechat decrypt`, let the user complete the GUI step, then resume with `me-distilled wizard --resume runs/<run>`.
 - If ModelScope fails, the CLI falls back to Hugging Face. If both fail, ask for local `--base` and `--base-gguf`.
 - If `llama.cpp` conversion fails, rerun `me-distilled setup tools --llama-cpp`, then `me-distilled convert adapter --run <run>`.
 - If Ollama cannot create the model, verify the base GGUF and adapter GGUF paths in `runs/<run>/status.json`.
