@@ -1357,6 +1357,7 @@ def command_sticker_export(args: argparse.Namespace) -> None:
     env = env_for_run(run_dir, decrypted, [])
     env["ME_DISTILLED_CUSTOM_EMOTION"] = str(wechat_files / "FileStorage" / "CustomEmotion")
     run_command([sys.executable, "-X", "utf8", "tools/export_wechat_emotions.py"], env=env)
+    run_command([sys.executable, "-X", "utf8", "tools/analyze_wechat_emoji_urls.py"], env=env)
     run_command([sys.executable, "-X", "utf8", "tools/build_wechat_emoji_mapping.py"], env=env)
     mark(run_dir, state, "stickers_exported")
 

@@ -5,6 +5,7 @@ import base64
 import json
 import os
 import re
+import sqlite3
 from pathlib import Path
 
 
@@ -17,6 +18,8 @@ THUMB_DIR = Path(os.environ.get("ME_DISTILLED_EMOTION_THUMB_DIR", EMOTION_ROOT /
 RAW_DIR = Path(os.environ.get("ME_DISTILLED_EMOTION_RAW_DIR", EMOTION_ROOT / "raw_v1mm"))
 OUT_CSV = Path(os.environ.get("ME_DISTILLED_EMOJI_MAPPING", ANALYSIS_DIR / "emoji_asset_mapping.csv"))
 OUT_JSON = Path(os.environ.get("ME_DISTILLED_EMOJI_MAPPING_JSON", ANALYSIS_DIR / "emoji_asset_mapping.json"))
+DB_MANIFEST = EMOTION_ROOT / "db_manifest.csv"
+EMOTION_DB = Path(os.environ.get("ME_DISTILLED_EMOTION_DB", PROJECT_ROOT / "wechat_decrypted" / "de_Emotion.db"))
 
 
 TEXT_RE = re.compile(r"[\u4e00-\u9fffA-Za-z0-9！？?!，。~～、]{1,20}")
@@ -52,8 +55,73 @@ def index_by_stem(directory: Path) -> dict[str, Path]:
     return index
 
 
+def rows_from_db_manifest() -> list[dict[str, str]]:
+    if not DB_MANIFEST.exists():
+        return []
+    counts: dict[str, int] = {}
+    for row in csv.DictReader(DB_MANIFEST.open(encoding="utf-8-sig")):
+        md5 = str(row.get("md5") or "").lower()
+        if md5:
+            counts[md5] = counts.get(md5, 0) + 1
+    return [
+        {
+            "md5": md5,
+            "count": str(count),
+            "sample_cdnurl": "",
+            "sample_thumburl": "",
+            "sample_productid": "",
+            "sample_desc": "",
+        }
+        for md5, count in sorted(counts.items())
+    ]
+
+
+def rows_from_emotion_db() -> list[dict[str, str]]:
+    if not EMOTION_DB.exists():
+        return []
+    rows: list[dict[str, str]] = []
+    conn = sqlite3.connect(str(EMOTION_DB))
+    try:
+        for md5, productid, from_url in conn.execute(
+            "select MD5, ProductId, FromUrl from EmotionItem where MD5 is not null"
+        ):
+            clean = str(md5 or "").lower()
+            if clean:
+                rows.append(
+                    {
+                        "md5": clean,
+                        "count": "1",
+                        "sample_cdnurl": str(from_url or ""),
+                        "sample_thumburl": "",
+                        "sample_productid": str(productid or ""),
+                        "sample_desc": "",
+                    }
+                )
+    finally:
+        conn.close()
+    return rows
+
+
+def load_summary_rows() -> list[dict[str, str]]:
+    if SUMMARY.exists():
+        return list(csv.DictReader(SUMMARY.open(encoding="utf-8-sig")))
+    ANALYSIS_DIR.mkdir(parents=True, exist_ok=True)
+    rows = rows_from_db_manifest() or rows_from_emotion_db()
+    if rows:
+        with SUMMARY.open("w", encoding="utf-8-sig", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
+            writer.writeheader()
+            writer.writerows(rows)
+        print(f"summary_missing_generated_from_db={SUMMARY}")
+    return rows
+
+
 def main() -> None:
-    rows = list(csv.DictReader(SUMMARY.open(encoding="utf-8-sig")))
+    rows = load_summary_rows()
+    if not rows:
+        raise FileNotFoundError(
+            f"未找到表情 summary，也无法从 db_manifest/de_Emotion.db 兜底生成：{SUMMARY}"
+        )
     gif_index = index_by_stem(GIF_DIR)
     thumb_index = index_by_stem(THUMB_DIR)
     raw_index = index_by_stem(RAW_DIR)
