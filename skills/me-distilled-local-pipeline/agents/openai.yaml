@@ -1,7 +1,0 @@
-interface:
-  display_name: "Me-Distilled Local Pipeline"
-  short_description: "本地微信聊天模型训练部署助手"
-  default_prompt: "Use $me-distilled-local-pipeline to clone the project, prepare dependencies, train a local chat-style LoRA model, and deploy it with Ollama."
-
-policy:
-  allow_implicit_invocation: true

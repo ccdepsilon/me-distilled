@@ -1,0 +1,7 @@
+interface:
+  display_name: "Me-Distilled"
+  short_description: "按本地流水线处理授权微信数据、训练并部署聊天风格模型"
+  default_prompt: "Use $me-distilled to clone or update the project, process authorized local WeChat data, build training data, train a LoRA adapter, convert it to GGUF, and create/test an Ollama model."
+
+policy:
+  allow_implicit_invocation: true

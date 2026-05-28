@@ -183,6 +183,16 @@ me-distilled web prepare --run my-run
 me-distilled web start --model me-distilled --port 3000
 ```
 
+## Agent Skill
+
+仓库内提供了 `skills/me-distilled`，可供 Codex 或 Claude Code 这类代码代理使用。这个 skill 不是普通的命令说明，而是让代理按照本项目同样的流水线主动执行：克隆/更新仓库、安装依赖、检查微信数据、构建数据、训练、转换、创建 Ollama 模型并测试。
+
+使用时可以把该目录安装到对应工具的 skills 目录，然后对代理说：
+
+```text
+Use $me-distilled to process my authorized local WeChat data and train/deploy the model.
+```
+
 ## 隐私说明
 
 `.gitignore` 默认排除了聊天记录、解密数据库、表情资源、模型权重和训练产物。不要把私人聊天记录、解密数据库、表情文件或模型权重提交到公开仓库。
