@@ -69,11 +69,12 @@ me-distilled doctor
 
 ```bash
 me-distilled wechat scan
+me-distilled wechat locate
 me-distilled wechat auto-decrypt
 me-distilled wechat check --decrypted ./wechat_decrypted
 ```
 
-Use `wechat auto-decrypt` first. It locates WeChat storage from registry/config/default document paths, reminds the user to open a supported low-version PC WeChat and sync chats, reads the running process key when possible, and decrypts into `wechat_decrypted`. Supported versions come from WeChatMsg's `version_list.json`; prefer PC WeChat 3.x, and assume 4.x may not be readable. If auto-decrypt fails, use the GUI fallback:
+Use `wechat locate` when static scanning does not find the account directory. It reads the running WeChat process and prints `wxid`, `filePath`, key status, and directory candidates. Use `wechat auto-decrypt` first for the actual decrypt flow. It locates WeChat storage from registry/config/default document paths, reminds the user to open a supported low-version PC WeChat and sync chats, reads the running process key when possible, and decrypts into `wechat_decrypted`. Supported versions come from WeChatMsg's `version_list.json`; prefer PC WeChat 3.x, and assume 4.x may not be readable. If auto-decrypt fails, use the GUI fallback:
 
 ```bash
 me-distilled wechat decrypt
