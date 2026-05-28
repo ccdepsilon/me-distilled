@@ -26,9 +26,9 @@ TOOLS_CACHE = CACHE_DIR / "tools"
 MODEL_CACHE = CACHE_DIR / "models"
 
 WECHATMSG_URLS = [
-    "https://gitee.com/lc044/WeChatMsg.git",
     "https://github.com/LC044/WeChatMsg.git",
     "https://ghfast.top/github.com/LC044/WeChatMsg.git",
+    "https://gitee.com/lc044/WeChatMsg.git",
 ]
 LLAMA_CPP_URLS = [
     "https://github.com/ggml-org/llama.cpp.git",
@@ -256,6 +256,20 @@ def install_python_packages(packages: list[str]) -> None:
     run_command([sys.executable, "-m", "pip", "install", *packages])
 
 
+def remove_tree(path: Path) -> None:
+    if not path.exists():
+        return
+
+    def make_writable(func: Any, item: str, _exc: Any) -> None:
+        try:
+            os.chmod(item, 0o700)
+        except Exception:
+            pass
+        func(item)
+
+    shutil.rmtree(path, onerror=make_writable)
+
+
 def clone_with_fallback(urls: list[str], target: Path, name: str) -> Path:
     if target.exists() and (target / ".git").exists():
         out(f"已发现 {name}: {target}", "green")
@@ -275,7 +289,7 @@ def clone_with_fallback(urls: list[str], target: Path, name: str) -> Path:
             return target
         last_error = proc.returncode
         if target.exists():
-            shutil.rmtree(target, ignore_errors=True)
+            remove_tree(target)
         out(f"{name} 下载失败，自动切换备用源。", "yellow")
     raise SystemExit(last_error or 1)
 
@@ -695,7 +709,7 @@ def ensure_wechatmsg() -> Path:
         out(f"已发现可用 WeChatMsg: {target}", "green")
         return target
     if target.exists():
-        shutil.rmtree(target, ignore_errors=True)
+        remove_tree(target)
 
     if not command_exists("git"):
         for local in (ROOT / "WeChatMsg-gitee", ROOT / "WeChatMsg"):
@@ -714,7 +728,7 @@ def ensure_wechatmsg() -> Path:
             return target
         last_error = proc.returncode
         if target.exists():
-            shutil.rmtree(target, ignore_errors=True)
+            remove_tree(target)
         out("这个 WeChatMsg 源不可用或缺少解密模块，自动切换备用源。", "yellow")
 
     for local in (ROOT / "WeChatMsg-gitee", ROOT / "WeChatMsg"):
@@ -1223,8 +1237,8 @@ def command_wechat_auto_decrypt(args: argparse.Namespace) -> None:
         if not args.yes:
             input("请确认微信已打开、已登录、聊天记录已同步后按回车继续...")
 
-    tool = Path(args.tool).resolve() if args.tool else ensure_wechatmsg().resolve()
     try:
+        tool = Path(args.tool).resolve() if args.tool else ensure_wechatmsg().resolve()
         get_wx_info, wx_decrypt, version_list = load_wechatmsg_modules_with_optional_install(tool, args.install_deps)
         version_summary = supported_wechat_version_summary(version_list)
         if version_summary:
@@ -1252,6 +1266,24 @@ def command_wechat_auto_decrypt(args: argparse.Namespace) -> None:
             raise RuntimeError(f"解密完成但检查未通过：{out_dir}")
         out(f"自动解密成功：{out_dir}", "green")
         out(f"de_MSG*.db: {len(result['msg_dbs'])}", "green")
+    except SystemExit as exc:
+        out(f"WeChatMsg 自动准备失败，准备切换备用方式。退出码: {exc.code}", "yellow")
+        if args.fallback_wdecipher:
+            try:
+                out("尝试 WDecipher/PyWxDump 备用解密。", "yellow")
+                out_dir = decrypt_with_wdecipher(
+                    Path(args.out or ROOT / "wechat_decrypted"),
+                    wechat_files=args.wechat_files,
+                    wxid=args.wxid,
+                    install=args.install_deps,
+                )
+                result = check_db(out_dir)
+                out(f"WDecipher 备用解密成功：{out_dir}", "green")
+                out(f"de_MSG*.db: {len(result['msg_dbs'])}", "green")
+                return
+            except Exception as wd_exc:
+                out(f"WDecipher 备用解密失败：{wd_exc}", "red")
+        raise SystemExit(exc.code or 1)
     except Exception as exc:
         out(f"自动解密失败：{exc}", "red")
         if args.fallback_wdecipher:
@@ -1271,7 +1303,7 @@ def command_wechat_auto_decrypt(args: argparse.Namespace) -> None:
                 out(f"WDecipher 备用解密失败：{wd_exc}", "red")
         if args.fallback_gui:
             out("改为打开 WeChatMsg 图形界面兜底。", "yellow")
-            command_wechat_decrypt(argparse.Namespace(tool=str(tool), yes=args.yes))
+            command_wechat_decrypt(argparse.Namespace(tool=str(locals().get("tool") or ""), yes=args.yes))
         raise SystemExit(1)
 
 
