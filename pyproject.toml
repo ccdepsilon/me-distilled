@@ -4,17 +4,17 @@ version = "0.1.0"
 description = "Local-first CLI pipeline for building a personal Chinese chat-style LoRA model."
 requires-python = ">=3.10"
 dependencies = [
-  "rich>=13.9.4,<15",
-  "requests>=2.32.3",
-  "tqdm>=4.67.1",
-  "modelscope>=1.22.3",
-  "huggingface-hub>=0.34,<1.0",
-  "psutil>=5.9",
-  "pydantic>=2.10",
-  "tomli-w>=1.2",
+  "rich==13.9.4",
+  "requests==2.32.3",
+  "tqdm==4.67.1",
+  "modelscope==1.22.3",
+  "huggingface-hub==0.34.4",
+  "psutil==6.1.1",
+  "pydantic==2.10.6",
+  "tomli-w==1.2.0",
   "wdecipher==0.0.1",
-  "pycryptodomex>=3.20",
-  "loguru>=0.7",
+  "pycryptodomex==3.20.0",
+  "loguru==0.7.3",
 ]
 
 [project.scripts]

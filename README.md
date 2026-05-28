@@ -80,7 +80,7 @@ me-distilled wizard
 -> 快速测试
 ```
 
-任意阶段都可以按 `Ctrl+C` 中断。已完成的文件会保留在当前 `runs/<run-name>`、`.cache/me-distilled`、`base_models` 等目录中，之后可以用 `--resume` 或重新运行同一命令继续。
+任意阶段都可以按 `Ctrl+C` 中断。关键选择步骤可以输入 `b` 返回上一步。已完成的文件会保留在当前 `runs/<run-name>`、`.cache/me-distilled`、`base_models` 等目录中，之后可以用 `--resume` 或重新运行同一命令继续。
 
 常用参数：
 
@@ -124,6 +124,7 @@ me-distilled doctor
 ```bash
 me-distilled setup deps --kind cli
 me-distilled setup deps --kind train
+me-distilled setup deps --kind system
 me-distilled setup tools --all
 me-distilled setup models --all
 ```
