@@ -27,19 +27,26 @@ TOOLS_CACHE = CACHE_DIR / "tools"
 MODEL_CACHE = CACHE_DIR / "models"
 
 WECHATMSG_URLS = [
-    "https://github.com/LC044/WeChatMsg.git",
-    "https://ghfast.top/github.com/LC044/WeChatMsg.git",
     "https://gitee.com/lc044/WeChatMsg.git",
+    "https://ghfast.top/github.com/LC044/WeChatMsg.git",
+    "https://github.com/LC044/WeChatMsg.git",
 ]
 LLAMA_CPP_URLS = [
-    "https://github.com/ggml-org/llama.cpp.git",
     "https://ghfast.top/github.com/ggml-org/llama.cpp.git",
+    "https://github.com/ggml-org/llama.cpp.git",
 ]
 
 HF_MODEL_ID = "Qwen/Qwen2.5-7B-Instruct"
 MODELSCOPE_MODEL_ID = "qwen/Qwen2.5-7B-Instruct"
 GGUF_REPO_ID = "bartowski/Qwen2.5-7B-Instruct-GGUF"
 GGUF_FILENAME = "Qwen2.5-7B-Instruct-Q4_K_M.gguf"
+GGUF_MIN_BYTES = 3_000_000_000
+MODELSCOPE_GGUF_ID = "QuantFactory/Qwen2.5-7B-Instruct-GGUF"
+MODELSCOPE_GGUF_FILENAME = "Qwen2.5-7B-Instruct.Q4_K_M.gguf"
+GGUF_DIRECT_URLS = [
+    "https://hf-mirror.com/bartowski/Qwen2.5-7B-Instruct-GGUF/resolve/main/Qwen2.5-7B-Instruct-Q4_K_M.gguf",
+    "https://huggingface.co/bartowski/Qwen2.5-7B-Instruct-GGUF/resolve/main/Qwen2.5-7B-Instruct-Q4_K_M.gguf",
+]
 
 SYSTEM_PROMPT = (
     "你是一个中文微信聊天模型，模仿“我”的聊天方式和语气。你正在和朋友微信聊天。"
@@ -251,27 +258,48 @@ def run_command(
 ) -> subprocess.CompletedProcess[str]:
     cwd.mkdir(parents=True, exist_ok=True)
     merged_env = os.environ.copy()
+    merged_env.setdefault("GIT_TERMINAL_PROMPT", "0")
     if env:
         merged_env.update(env)
     out(f"\n$ {' '.join(cmd)}", "cyan")
-    stdout_target: Any = None
-    stderr_target: Any = None
     log_file = None
     if log:
         log.parent.mkdir(parents=True, exist_ok=True)
         log_file = log.open("a", encoding="utf-8", newline="\n")
         log_file.write(f"\n\n$ {' '.join(cmd)}\n")
         log_file.flush()
-        stdout_target = log_file
-        stderr_target = subprocess.STDOUT
     try:
-        proc = subprocess.Popen(cmd, cwd=cwd, env=merged_env, text=True, stdout=stdout_target, stderr=stderr_target)
+        if log_file is not None:
+            proc = subprocess.Popen(
+                cmd,
+                cwd=cwd,
+                env=merged_env,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                bufsize=1,
+            )
+        else:
+            proc = subprocess.Popen(cmd, cwd=cwd, env=merged_env, text=True)
         try:
-            while True:
-                returncode = proc.poll()
-                if returncode is not None:
-                    break
-                time.sleep(0.2)
+            if log_file is not None and proc.stdout is not None:
+                while True:
+                    line = proc.stdout.readline()
+                    if line:
+                        print(line, end="")
+                        log_file.write(line)
+                        log_file.flush()
+                        continue
+                    returncode = proc.poll()
+                    if returncode is not None:
+                        break
+                    time.sleep(0.2)
+            else:
+                while True:
+                    returncode = proc.poll()
+                    if returncode is not None:
+                        break
+                    time.sleep(0.2)
         except KeyboardInterrupt:
             out("\n收到 Ctrl+C，正在停止当前子进程...", "yellow")
             try:
@@ -337,9 +365,10 @@ def install_ollama() -> bool:
     archive = install_dir / "ollama-linux-amd64.tgz"
     install_dir.mkdir(parents=True, exist_ok=True)
     urls = [
-        "https://ollama.com/download/ollama-linux-amd64.tgz",
+        "https://repo.oepkgs.net/openEuler/rpm/openEuler-24.03-LTS/contrib/oedp/2025.0330/ollama-linux-amd64.tgz",
         "https://ghfast.top/github.com/ollama/ollama/releases/latest/download/ollama-linux-amd64.tgz",
         "https://hub.gitmirror.com/github.com/ollama/ollama/releases/latest/download/ollama-linux-amd64.tgz",
+        "https://ollama.com/download/ollama-linux-amd64.tgz",
     ]
     for url in urls:
         out(f"正在下载 Ollama: {url}", "cyan")
@@ -376,6 +405,35 @@ def install_ollama() -> bool:
         return command_exists("ollama") or ollama_bin.exists()
     out("Ollama 自动安装失败：所有下载源都不可用。请检查网络或手动上传安装包。", "red")
     return False
+
+
+def ollama_env() -> dict[str, str]:
+    models_dir = CACHE_DIR / "ollama-models"
+    models_dir.mkdir(parents=True, exist_ok=True)
+    return {"OLLAMA_MODELS": str(models_dir)}
+
+
+def ensure_ollama_server() -> None:
+    env = ollama_env()
+    if run_command(["ollama", "list"], env=env, check=False).returncode == 0:
+        return
+    log = CACHE_DIR / "ollama-serve.log"
+    out("Ollama 服务未运行，正在后台启动 ollama serve。", "yellow")
+    log.parent.mkdir(parents=True, exist_ok=True)
+    log_file = log.open("a", encoding="utf-8", newline="\n")
+    merged_env = os.environ.copy()
+    merged_env.update(env)
+    subprocess.Popen(["ollama", "serve"], stdout=log_file, stderr=subprocess.STDOUT, env=merged_env)
+    for _ in range(30):
+        time.sleep(1)
+        if run_command(["ollama", "list"], env=env, check=False).returncode == 0:
+            out(f"Ollama 服务已启动，模型目录: {env['OLLAMA_MODELS']}", "green")
+            return
+    out(f"Ollama 服务启动失败，日志: {log}", "red")
+    tail = tail_text(log, 80)
+    if tail:
+        print(tail)
+    raise SystemExit(1)
 
 
 def interrupted() -> None:
@@ -993,14 +1051,96 @@ except KeyboardInterrupt:
 
 def ensure_base_gguf(path: Path | None = None) -> Path | None:
     target = path or MODEL_CACHE / GGUF_FILENAME
-    if target.exists() and target.stat().st_size > 1_000_000:
+    if target.exists() and target.stat().st_size > GGUF_MIN_BYTES:
         out(f"已发现 GGUF 基座: {target}", "green")
         return target
+    if target.exists():
+        out(f"发现未完整的 GGUF 文件，正在删除后重新下载: {target}", "yellow")
+        target.unlink()
     target.parent.mkdir(parents=True, exist_ok=True)
+    out("正在下载 Qwen2.5-7B-Instruct Q4_K_M GGUF。", "cyan")
+    if module_exists("modelscope"):
+        result_file = CACHE_DIR / f"download-gguf-modelscope-{os.getpid()}.json"
+        if result_file.exists():
+            result_file.unlink()
+        script = r"""
+import json
+import os
+import sys
+from pathlib import Path
+
+result_file = Path(os.environ["ME_DISTILLED_DOWNLOAD_RESULT"])
+model_id = os.environ["ME_DISTILLED_MODELSCOPE_GGUF_ID"]
+filename = os.environ["ME_DISTILLED_MODELSCOPE_GGUF_FILENAME"]
+cache_dir = os.environ["ME_DISTILLED_MODELSCOPE_GGUF_CACHE"]
+
+def write_result(status, path="", error=""):
+    result_file.parent.mkdir(parents=True, exist_ok=True)
+    result_file.write_text(
+        json.dumps({"status": status, "path": path, "error": error}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+try:
+    from modelscope import snapshot_download
+    downloaded = Path(snapshot_download(model_id, allow_file_pattern=filename, cache_dir=cache_dir))
+    matches = list(downloaded.rglob(filename))
+    if not matches:
+        raise FileNotFoundError(f"{filename} not found under {downloaded}")
+    print(f"ModelScope GGUF 下载完成: {matches[0]}", flush=True)
+    write_result("ok", str(matches[0]))
+    sys.exit(0)
+except KeyboardInterrupt:
+    print("GGUF 下载已中断。", flush=True)
+    sys.exit(130)
+except Exception as exc:
+    print(f"ModelScope GGUF 下载失败: {exc}", flush=True)
+    write_result("error", error=str(exc))
+    sys.exit(1)
+"""
+        env = {
+            "ME_DISTILLED_DOWNLOAD_RESULT": str(result_file),
+            "ME_DISTILLED_MODELSCOPE_GGUF_ID": MODELSCOPE_GGUF_ID,
+            "ME_DISTILLED_MODELSCOPE_GGUF_FILENAME": MODELSCOPE_GGUF_FILENAME,
+            "ME_DISTILLED_MODELSCOPE_GGUF_CACHE": str(MODEL_CACHE / "modelscope-gguf"),
+        }
+        proc = run_command([sys.executable, "-c", script], env=env, check=False)
+        if proc.returncode == 130:
+            interrupted()
+        if result_file.exists():
+            result = read_json(result_file, {})
+            source = Path(str(result.get("path", "")))
+            if result.get("status") == "ok" and source.exists() and source.stat().st_size > GGUF_MIN_BYTES:
+                if target.exists() or target.is_symlink():
+                    target.unlink()
+                try:
+                    target.symlink_to(source)
+                except Exception:
+                    shutil.copy2(source, target)
+                out(f"GGUF 基座已就绪: {target}", "green")
+                return target
+            if result.get("error"):
+                out(f"ModelScope GGUF 下载失败: {result['error']}", "yellow")
+        else:
+            out("ModelScope GGUF 下载失败。", "yellow")
+    if command_exists("curl"):
+        for url in GGUF_DIRECT_URLS:
+            out(f"正在下载 GGUF 基座: {url}", "cyan")
+            proc = run_command(
+                ["curl", "-L", "--fail", "--connect-timeout", "20", "--max-time", "3600", url, "-o", str(target)],
+                check=False,
+            )
+            if proc.returncode == 130:
+                interrupted()
+            if proc.returncode == 0 and target.exists() and target.stat().st_size > GGUF_MIN_BYTES:
+                out(f"GGUF 基座下载完成: {target}", "green")
+                return target
+            if target.exists() and target.stat().st_size < GGUF_MIN_BYTES:
+                target.unlink()
+            out("这个 GGUF 下载源不可用，自动切换备用源。", "yellow")
     if not module_exists("huggingface_hub"):
         out("未安装 huggingface-hub，无法自动下载 GGUF。", "yellow")
         return None
-    out("正在下载 Qwen2.5-7B-Instruct Q4_K_M GGUF。", "cyan")
     result_file = CACHE_DIR / f"download-gguf-{os.getpid()}.json"
     if result_file.exists():
         result_file.unlink()
@@ -1802,6 +1942,7 @@ def command_ollama_create(args: argparse.Namespace) -> None:
         out("未找到 Ollama，正在尝试自动安装。", "yellow")
         if not install_ollama() or not command_exists("ollama"):
             raise SystemExit(1)
+    ensure_ollama_server()
     base_gguf = Path(args.base_gguf) if args.base_gguf else ensure_base_gguf(None)
     if not base_gguf:
         raise SystemExit(1)
@@ -1811,7 +1952,7 @@ def command_ollama_create(args: argparse.Namespace) -> None:
         raise SystemExit(1)
     modelfile = run_dir / "Modelfile"
     write_modelfile(modelfile, base_gguf, adapter, args.name)
-    run_command(["ollama", "create", args.name, "-f", str(modelfile)])
+    run_command(["ollama", "create", args.name, "-f", str(modelfile)], env=ollama_env())
     state.paths["base_gguf"] = str(base_gguf)
     state.paths["modelfile"] = str(modelfile)
     state.config["ollama_model"] = args.name
@@ -1819,6 +1960,7 @@ def command_ollama_create(args: argparse.Namespace) -> None:
 
 
 def ollama_chat(model: str, text: str, temperature: float = 0.2) -> str:
+    ensure_ollama_server()
     body = {
         "model": model,
         "stream": False,
