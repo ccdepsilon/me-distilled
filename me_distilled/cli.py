@@ -277,12 +277,14 @@ def run_command(
                 cwd=cwd,
                 env=merged_env,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 bufsize=1,
             )
         else:
-            proc = subprocess.Popen(cmd, cwd=cwd, env=merged_env, text=True)
+            proc = subprocess.Popen(cmd, cwd=cwd, env=merged_env, text=True, encoding="utf-8", errors="replace")
         try:
             if log_file is not None and proc.stdout is not None:
                 while True:
