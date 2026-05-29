@@ -358,8 +358,16 @@ def install_ollama() -> bool:
         out("已发现 Ollama。", "green")
         return True
     if is_windows():
-        out("未找到 Ollama。Windows 请运行官方安装包；安装后重新打开终端再继续。", "yellow")
-        out("下载地址：https://ollama.com/download/windows", "cyan")
+        if command_exists("winget"):
+            out("未找到 Ollama，正在尝试通过 winget 自动安装。", "yellow")
+            proc = run_command(["winget", "install", "--id", "Ollama.Ollama", "-e"], check=False)
+            if proc.returncode == 0:
+                out("Ollama 安装命令已完成。请重新打开终端后继续。", "green")
+                return True
+            out("winget 自动安装 Ollama 失败，改为提示手动安装。", "yellow")
+        else:
+            out("未找到 winget，无法在 Windows 上自动安装 Ollama。", "yellow")
+        out("请安装官方 Ollama，安装后重新打开终端再继续：https://ollama.com/download/windows", "cyan")
         return False
     if sys.platform != "linux":
         out("未找到 Ollama。当前系统暂不支持自动安装，请先手动安装 Ollama。", "yellow")
