@@ -23,6 +23,9 @@ This skill is an execution workflow for agents. Do the work yourself with the re
    - Check `git status --short` and avoid touching generated private data.
 
 2. Install and verify the CLI.
+   - Assume system-level software should already exist: Python 3.10+, Git, and optionally Node.js/npm for the web frontend.
+   - Do not promise automatic installation of Git or Node.js/npm. If missing, stop and ask the user to install them.
+   - Ollama can be reused if installed; on Linux the CLI may try to download it, but on Windows tell the user to install official Ollama first.
    - Run `python -m pip install -e .`.
    - Run `me-distilled doctor`.
    - Install CLI dependencies with `me-distilled setup deps --kind cli` if imports or commands fail.

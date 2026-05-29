@@ -60,10 +60,13 @@ Gitee 上的 Ollama 镜像更适合查看源码，不一定提供可直接解压
 
 - Windows：推荐用于微信数据库解密。
 - Python 3.10+
-- Git
-- Ollama
+- Git：用于自动克隆 WeChatMsg、llama.cpp 等工具；CLI 只会检查，不会自动安装 Git。
+- Node.js / npm：只有使用 Web 前端时需要；CLI 只会检查，不会自动安装 Node.js/npm。
+- Ollama：用于本地推理和模型创建；CLI 会复用已安装版本，Linux 下会尝试自动下载，Windows 上仍建议提前安装官方 Ollama。
 - 本地推理可无 GPU 运行；如需本地训练 7B LoRA，建议准备 NVIDIA GPU 和 CUDA 环境。
 - 已授权的微信聊天记录。
+
+提示：系统级软件建议提前准备好，至少包括 Python、Git；如果要启动 Web 前端，还需要 Node.js/npm；如果要本地测试模型，还需要 Ollama。`me-distilled doctor` 会检查这些项目并给出缺失提示。
 
 ## 安装
 

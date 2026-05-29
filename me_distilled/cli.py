@@ -1238,6 +1238,12 @@ def command_doctor(_args: argparse.Namespace) -> None:
     else:
         for item, value, note in rows:
             print(f"{item}: {value} ({note})")
+    out(
+        "提示：Python、Git 是基础前置依赖；Node.js/npm 仅在使用 Web 前端时需要；"
+        "Ollama 用于本地创建和测试模型。CLI 会检查这些软件，部分环境可辅助安装 Ollama，"
+        "但不会自动安装 Git 或 Node.js/npm。",
+        "yellow",
+    )
 
 
 def command_setup_deps(args: argparse.Namespace) -> None:
@@ -2094,6 +2100,7 @@ def wizard(args: argparse.Namespace) -> None:
             本向导会自动准备工具、构建训练数据、本地 LoRA 训练，并用 Ollama 部署。
             所有产物都会放在: {rel(run_dir)}
             请只处理本人或已获得明确授权的聊天记录。
+            请提前安装 Python 3.10+ 和 Git；如需 Web 前端请安装 Node.js/npm；如需本地测试模型请安装 Ollama。
             """
         ).strip(),
     )
