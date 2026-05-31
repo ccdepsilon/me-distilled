@@ -2073,7 +2073,7 @@ def command_ollama_test(args: argparse.Namespace) -> None:
 
 def command_web_prepare(args: argparse.Namespace) -> None:
     run_dir, state = ensure_run(args.run, args.resume)
-    web = Path(args.web_dir)
+    web = resolve_web_dir(args.web_dir)
     app_map = web / "app" / "sticker-map.json"
     public_stickers = web / "public" / "stickers"
     app_map.parent.mkdir(parents=True, exist_ok=True)
@@ -2097,7 +2097,7 @@ def command_web_prepare(args: argparse.Namespace) -> None:
 
 
 def command_web_start(args: argparse.Namespace) -> None:
-    web = Path(args.web_dir)
+    web = resolve_web_dir(args.web_dir)
     if not command_exists("npm"):
         out("未找到 npm，请先安装 Node.js。", "red")
         raise SystemExit(1)
@@ -2115,6 +2115,33 @@ def command_web_start(args: argparse.Namespace) -> None:
     }
     out(f"启动前端: http://127.0.0.1:{args.port}", "green")
     run_command(["npm", "run", "start", "--", "-H", args.host, "-p", str(args.port)], cwd=web, env=env)
+
+
+def resolve_web_dir(value: str) -> Path:
+    candidates: list[Path] = []
+    if value:
+        candidates.append(Path(value))
+    candidates.extend([ROOT / "web-chat", Path.cwd() / "web-chat"])
+    seen: set[Path] = set()
+    for candidate in candidates:
+        candidate = candidate.expanduser()
+        if not candidate.is_absolute():
+            candidate = (Path.cwd() / candidate).resolve()
+        else:
+            candidate = candidate.resolve()
+        if candidate in seen:
+            continue
+        seen.add(candidate)
+        if (candidate / "package.json").exists():
+            return candidate
+    checked = "\n".join(f"  - {path}" for path in seen)
+    out(
+        "未找到前端目录 web-chat/package.json。\n"
+        "请确认你在完整仓库中运行，或用 --web-dir 指定 web-chat 目录。\n"
+        f"已检查：\n{checked}",
+        "red",
+    )
+    raise SystemExit(1)
 
 
 def command_cleanup(args: argparse.Namespace) -> None:
