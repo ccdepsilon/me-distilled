@@ -1,15 +1,19 @@
+import os
+
+os.environ["PYTORCH_ENABLE_META_DEVICE_IMPORT"] = "0"
+os.environ["PYTHONIOENCODING"] = "utf-8"
+
 import argparse
 import json
 import math
-import os
 import random
 from pathlib import Path
 
 import torch
-from peft import LoraConfig, PeftModel, get_peft_model
+from peft import LoraConfig, PeftModel, get_peft_model, prepare_model_for_kbit_training
 from torch.utils.data import DataLoader, Dataset
 from tqdm.auto import tqdm
-from transformers import AutoModelForCausalLM, AutoTokenizer, get_cosine_schedule_with_warmup
+from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig, get_cosine_schedule_with_warmup
 
 
 SYSTEM_PROMPT = (
@@ -117,20 +121,55 @@ def split_rows(rows: list[dict], seed: int, eval_size: int) -> tuple[list[dict],
     return rows[eval_size:], rows[:eval_size]
 
 
-def resolve_model_dir(path: Path) -> Path:
+TOKENIZER_FILES = ("tokenizer_config.json", "tokenizer.json", "tokenizer.model", "vocab.json", "merges.txt")
+MODEL_WEIGHT_FILES = (
+    "model.safetensors",
+    "model.safetensors.index.json",
+    "pytorch_model.bin",
+    "pytorch_model.bin.index.json",
+)
+
+
+def has_tokenizer_files(path: Path) -> bool:
+    return any((path / name).exists() for name in TOKENIZER_FILES)
+
+
+def has_model_weights(path: Path) -> bool:
+    return any((path / name).exists() for name in MODEL_WEIGHT_FILES) or any(path.glob("*.safetensors")) or any(path.glob("*.bin"))
+
+
+def find_tokenizer_dir(model_dir: Path, search_root: Path) -> Path | None:
+    current = model_dir
+    while True:
+        if has_tokenizer_files(current):
+            return current
+        if current == search_root or current.parent == current:
+            break
+        current = current.parent
+
+    matches = [candidate.parent for name in TOKENIZER_FILES for candidate in search_root.rglob(name)]
+    if matches:
+        matches = sorted(set(matches), key=lambda item: (len(item.relative_to(search_root).parts), str(item).lower()))
+        return matches[0]
+    return None
+
+
+def resolve_model_paths(path: Path) -> tuple[Path, Path]:
     path = path.expanduser().resolve()
     if not path.exists():
         raise FileNotFoundError(f"model_dir does not exist: {path}")
     if path.is_file():
         raise NotADirectoryError(f"model_dir must be a directory, got file: {path}")
 
-    tokenizer_files = ("tokenizer_config.json", "tokenizer.json", "tokenizer.model", "vocab.json", "merges.txt")
-
     def looks_like_model_dir(candidate: Path) -> bool:
-        return (candidate / "config.json").exists() and any((candidate / name).exists() for name in tokenizer_files)
+        return (candidate / "config.json").exists() and has_model_weights(candidate)
 
     if looks_like_model_dir(path):
-        return path
+        model_dir = path
+        tokenizer_dir = find_tokenizer_dir(model_dir, path)
+        if tokenizer_dir is None:
+            raise FileNotFoundError(f"Could not find tokenizer files under {path}. Expected one of: {', '.join(TOKENIZER_FILES)}")
+        return model_dir, tokenizer_dir
 
     common_children = [
         "model",
@@ -142,18 +181,36 @@ def resolve_model_dir(path: Path) -> Path:
     for child in common_children:
         candidate = path / child
         if candidate.exists() and looks_like_model_dir(candidate):
-            return candidate
+            tokenizer_dir = find_tokenizer_dir(candidate, path)
+            if tokenizer_dir is None:
+                raise FileNotFoundError(f"Could not find tokenizer files under {path}. Expected one of: {', '.join(TOKENIZER_FILES)}")
+            return candidate, tokenizer_dir
 
     matches = [candidate for candidate in path.rglob("config.json") if looks_like_model_dir(candidate.parent)]
     if matches:
         matches.sort(key=lambda item: (len(item.parent.relative_to(path).parts), str(item.parent).lower()))
-        return matches[0].parent
+        model_dir = matches[0].parent
+        tokenizer_dir = find_tokenizer_dir(model_dir, path)
+        if tokenizer_dir is None:
+            raise FileNotFoundError(f"Could not find tokenizer files under {path}. Expected one of: {', '.join(TOKENIZER_FILES)}")
+        return model_dir, tokenizer_dir
 
     raise FileNotFoundError(
         f"Could not find a Hugging Face/Transformers model directory under {path}. "
-        "Expected config.json plus tokenizer files. If this is a ModelScope cache root, "
+        "Expected config.json plus model weight files. If this is a ModelScope cache root, "
         "pass the nested snapshot/model directory or update the download path."
     )
+
+
+def resolve_model_dir(path: Path) -> Path:
+    return resolve_model_paths(path)[0]
+
+
+def first_real_device(model) -> torch.device:
+    for parameter in model.parameters():
+        if parameter.device.type != "meta":
+            return parameter.device
+    return torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
 def main() -> None:
@@ -174,31 +231,47 @@ def main() -> None:
     parser.add_argument("--save_steps", type=int, default=120)
     parser.add_argument("--resume_adapter", default="")
     parser.add_argument("--resume_global_step", type=int, default=0)
+    parser.add_argument("--load_in_4bit", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--gradient_checkpointing", action=argparse.BooleanOptionalAction, default=False)
     args = parser.parse_args()
 
     torch.manual_seed(args.seed)
     random.seed(args.seed)
     os.makedirs(args.output_dir, exist_ok=True)
 
-    model_dir = resolve_model_dir(Path(args.model_dir))
+    model_dir, tokenizer_dir = resolve_model_paths(Path(args.model_dir))
     if str(model_dir) != str(Path(args.model_dir).expanduser().resolve()):
         print(f"resolved_model_dir: {model_dir}")
+    if tokenizer_dir != model_dir:
+        print(f"resolved_tokenizer_dir: {tokenizer_dir}")
 
-    tokenizer = AutoTokenizer.from_pretrained(str(model_dir), trust_remote_code=True, use_fast=True)
+    tokenizer = AutoTokenizer.from_pretrained(str(tokenizer_dir), trust_remote_code=True, use_fast=True)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
     rows = read_jsonl(Path(args.data))
     train_rows, eval_rows = split_rows(rows, args.seed, args.eval_size)
 
+    quantization_config = None
+    if args.load_in_4bit:
+        quantization_config = BitsAndBytesConfig(
+            load_in_4bit=True,
+            bnb_4bit_use_double_quant=True,
+            bnb_4bit_quant_type="nf4",
+            bnb_4bit_compute_dtype=torch.float16,
+        )
     model = AutoModelForCausalLM.from_pretrained(
         str(model_dir),
-        torch_dtype=torch.float16,
+        torch_dtype=None if args.load_in_4bit else torch.float16,
+        quantization_config=quantization_config,
         device_map="auto",
         trust_remote_code=True,
     )
     model.config.use_cache = False
-    model.gradient_checkpointing_enable()
+    if args.load_in_4bit:
+        model = prepare_model_for_kbit_training(model, use_gradient_checkpointing=args.gradient_checkpointing)
+    elif args.gradient_checkpointing:
+        model.gradient_checkpointing_enable()
 
     if args.resume_adapter:
         model = PeftModel.from_pretrained(model, args.resume_adapter, is_trainable=True)
@@ -216,6 +289,8 @@ def main() -> None:
 
     train_ds = ChatDataset(train_rows, tokenizer, args.max_length)
     eval_ds = ChatDataset(eval_rows, tokenizer, args.max_length)
+    if len(train_ds) == 0:
+        raise RuntimeError("No trainable rows after tokenization. Increase --max_length or check data.")
     collator = Collator(tokenizer)
     train_loader = DataLoader(train_ds, batch_size=args.batch_size, shuffle=True, collate_fn=collator)
     eval_loader = DataLoader(eval_ds, batch_size=args.batch_size, shuffle=False, collate_fn=collator)
@@ -224,7 +299,10 @@ def main() -> None:
     total_steps = math.ceil(len(train_loader) * args.epochs / args.grad_accum)
     warmup_steps = max(10, total_steps // 20)
     scheduler = get_cosine_schedule_with_warmup(optimizer, warmup_steps, total_steps)
-    scaler = torch.amp.GradScaler("cuda")
+    use_cuda = torch.cuda.is_available()
+    autocast_device = "cuda" if use_cuda else "cpu"
+    input_device = first_real_device(model)
+    scaler = torch.amp.GradScaler("cuda", enabled=use_cuda)
 
     global_step = args.resume_global_step
     accum_loss = 0.0
@@ -241,8 +319,8 @@ def main() -> None:
             if global_step >= total_steps:
                 break
             seen_batches += 1
-            batch = {k: v.to(model.device) for k, v in batch.items()}
-            with torch.autocast(device_type="cuda", dtype=torch.float16):
+            batch = {k: v.to(input_device) for k, v in batch.items()}
+            with torch.autocast(device_type=autocast_device, dtype=torch.float16, enabled=use_cuda):
                 loss = model(**batch).loss / args.grad_accum
             scaler.scale(loss).backward()
             accum_loss += loss.item()
@@ -274,8 +352,8 @@ def main() -> None:
     losses = []
     with torch.no_grad():
         for batch in tqdm(eval_loader, desc="eval"):
-            batch = {k: v.to(model.device) for k, v in batch.items()}
-            with torch.autocast(device_type="cuda", dtype=torch.float16):
+            batch = {k: v.to(input_device) for k, v in batch.items()}
+            with torch.autocast(device_type=autocast_device, dtype=torch.float16, enabled=use_cuda):
                 losses.append(float(model(**batch).loss.detach().cpu()))
     eval_loss = sum(losses) / max(1, len(losses))
 
@@ -288,6 +366,9 @@ def main() -> None:
                 "data": args.data,
                 "model_dir": args.model_dir,
                 "resolved_model_dir": str(model_dir),
+                "resolved_tokenizer_dir": str(tokenizer_dir),
+                "load_in_4bit": args.load_in_4bit,
+                "gradient_checkpointing": args.gradient_checkpointing,
                 "train_rows": len(train_rows),
                 "eval_rows": len(eval_rows),
                 "epochs": args.epochs,

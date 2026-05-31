@@ -136,10 +136,34 @@ def new_run_name() -> str:
     return f"{stamp}-{len(existing) + 1:03d}"
 
 
+def resolve_run_dir(run: str | None = None, resume: str | None = None) -> Path:
+    if resume:
+        raw = Path(resume)
+    elif run:
+        raw = Path(run)
+    else:
+        raw = RUNS_DIR / new_run_name()
+
+    if raw.is_absolute():
+        return raw
+    if resume:
+        return ROOT / raw
+    if raw.parent == Path("."):
+        return RUNS_DIR / raw
+    if raw.parts and raw.parts[0] == RUNS_DIR.name:
+        return ROOT / raw
+    return ROOT / raw
+
+
+def existing_path(value: str | os.PathLike[str] | None) -> Path | None:
+    if not value:
+        return None
+    path = Path(value)
+    return path if path.exists() else None
+
+
 def ensure_run(run: str | None = None, resume: str | None = None) -> tuple[Path, RunState]:
-    run_dir = Path(resume) if resume else RUNS_DIR / (run or new_run_name())
-    if not run_dir.is_absolute():
-        run_dir = ROOT / run_dir
+    run_dir = resolve_run_dir(run, resume)
     for sub in [
         "logs",
         "exports/txt",
@@ -901,6 +925,7 @@ def env_for_run(
     contact_sample_rate: float = 1.0,
     contact_max_messages: int = 0,
     contact_sample_seed: int = 20260528,
+    contact_sample_mode: str = "random-window",
 ) -> dict[str, str]:
     emotion_out = run_dir / "stickers" / "emotion_export"
     sensitive_terms = read_lines(run_dir / "sensitive_words.txt")
@@ -927,6 +952,7 @@ def env_for_run(
         "ME_DISTILLED_CONTACT_SAMPLE_RATE": str(contact_sample_rate),
         "ME_DISTILLED_CONTACT_MAX_MESSAGES": str(contact_max_messages),
         "ME_DISTILLED_CONTACT_SAMPLE_SEED": str(contact_sample_seed),
+        "ME_DISTILLED_CONTACT_SAMPLE_MODE": contact_sample_mode,
     }
 
 
@@ -1790,6 +1816,14 @@ def command_data_build(args: argparse.Namespace) -> None:
     contacts = read_lines(Path(args.contacts))
     groups = read_lines(Path(args.groups)) if args.groups else []
     identity_answers = [item for item in args.identity_answer if item.strip()]
+    contact_sample_rate = getattr(args, "contact_sample_rate", 1.0)
+    contact_max_messages = getattr(args, "contact_max_messages", 0)
+    contact_sample_seed = getattr(args, "contact_sample_seed", 20260528)
+    contact_sample_mode = getattr(args, "contact_sample_mode", "random-window")
+    if not 0 < contact_sample_rate <= 1:
+        raise SystemExit("--contact-sample-rate must be in (0, 1].")
+    if contact_max_messages < 0:
+        raise SystemExit("--contact-max-messages must be >= 0.")
     env = env_for_run(
         run_dir,
         Path(args.decrypted),
@@ -1798,9 +1832,10 @@ def command_data_build(args: argparse.Namespace) -> None:
         sticker=not args.no_sticker,
         synthetic=args.synthetic,
         identity_answers=identity_answers,
-        contact_sample_rate=getattr(args, "contact_sample_rate", 1.0),
-        contact_max_messages=getattr(args, "contact_max_messages", 0),
-        contact_sample_seed=getattr(args, "contact_sample_seed", 20260528),
+        contact_sample_rate=contact_sample_rate,
+        contact_max_messages=contact_max_messages,
+        contact_sample_seed=contact_sample_seed,
+        contact_sample_mode=contact_sample_mode,
     )
     run_command([sys.executable, "-X", "utf8", "tools/build_sticker_training_data.py"], env=env, log=run_dir / "logs" / "data-build.log")
     final_data = run_dir / "data" / "qa_with_stickers_train.jsonl"
@@ -1820,9 +1855,10 @@ def command_data_build(args: argparse.Namespace) -> None:
         final_data = run_dir / "data" / "qa_text_emoji_tag_train.jsonl"
     state.paths["train_data"] = str(final_data)
     state.config["data_mode"] = args.mode
-    state.config["contact_sample_rate"] = getattr(args, "contact_sample_rate", 1.0)
-    state.config["contact_max_messages"] = getattr(args, "contact_max_messages", 0)
-    state.config["contact_sample_seed"] = getattr(args, "contact_sample_seed", 20260528)
+    state.config["contact_sample_rate"] = contact_sample_rate
+    state.config["contact_max_messages"] = contact_max_messages
+    state.config["contact_sample_seed"] = contact_sample_seed
+    state.config["contact_sample_mode"] = contact_sample_mode
     mark(run_dir, state, "data_built")
     out(f"训练数据: {final_data}", "green")
     command_data_report(argparse.Namespace(data=str(final_data), out=str(run_dir / "data" / "report.summary.txt"), sticker_map=str(run_dir / "stickers" / "sticker-map.json")))
@@ -1877,10 +1913,14 @@ def find_default_train_data(run_dir: Path) -> Path:
 
 def command_train_lora(args: argparse.Namespace) -> None:
     run_dir, state = ensure_run(args.run, args.resume)
-    base = Path(args.base) if args.base else ensure_hf_model(None)
+    base = Path(args.base) if args.base else existing_path(state.paths.get("hf_base"))
+    if not base or not base.exists():
+        base = ensure_hf_model(None)
     if not base:
         raise SystemExit(1)
-    data = Path(args.data) if args.data else find_default_train_data(run_dir)
+    data = Path(args.data) if args.data else existing_path(state.paths.get("train_data"))
+    if not data or not data.exists():
+        data = find_default_train_data(run_dir)
     out_dir = Path(args.output) if args.output else run_dir / "model" / "lora"
     if not module_exists("torch") or not module_exists("transformers") or not module_exists("peft"):
         out("缺少训练依赖。请先运行：me-distilled setup deps --kind train", "red")
@@ -1925,6 +1965,8 @@ def command_train_lora(args: argparse.Namespace) -> None:
         "--save_steps",
         str(args.save_steps),
     ]
+    cmd.append("--load_in_4bit" if args.load_in_4bit else "--no-load_in_4bit")
+    cmd.append("--gradient_checkpointing" if args.gradient_checkpointing else "--no-gradient_checkpointing")
     run_command(cmd, log=train_log)
     state.paths["hf_base"] = str(base)
     state.paths["train_data"] = str(data)
@@ -1978,15 +2020,21 @@ def command_train_sticker_selector(args: argparse.Namespace) -> None:
 
 def command_convert_adapter(args: argparse.Namespace) -> None:
     run_dir, state = ensure_run(args.run, args.resume)
-    base = Path(args.base) if args.base else Path(state.paths.get("hf_base", ""))
-    if not base.exists():
-        base = ensure_hf_model(None) or base
+    base = Path(args.base) if args.base else existing_path(state.paths.get("hf_base"))
+    if not base or not base.exists():
+        base = ensure_hf_model(None)
+    if not base:
+        raise SystemExit(1)
     llama = Path(args.llama_cpp) if args.llama_cpp else ensure_llama_cpp()
     script = llama / "convert_lora_to_gguf.py"
     if not script.exists():
         out(f"未找到转换脚本: {script}", "red")
         raise SystemExit(1)
-    adapter = Path(args.adapter) if args.adapter else run_dir / "model" / "lora" / "final_adapter"
+    adapter = Path(args.adapter) if args.adapter else Path(state.paths.get("lora", run_dir / "model" / "lora" / "final_adapter"))
+    if not adapter.exists():
+        out(f"未找到 LoRA adapter: {adapter}", "red")
+        out("请先运行 train lora，或用 --adapter 指定 final_adapter 目录。", "yellow")
+        raise SystemExit(1)
     out_path = Path(args.out) if args.out else run_dir / "model" / "adapter.gguf"
     run_command([sys.executable, "-X", "utf8", str(script), str(adapter), "--base", str(base), "--outfile", str(out_path)])
     state.paths["adapter_gguf"] = str(out_path)
@@ -2147,9 +2195,7 @@ def resolve_web_dir(value: str) -> Path:
 def command_cleanup(args: argparse.Namespace) -> None:
     if not args.run and not args.resume:
         raise SystemExit("请使用 --run 或 --resume 指定要清理的 run 目录。")
-    run_dir = Path(args.resume or args.run)
-    if not run_dir.is_absolute():
-        run_dir = (RUNS_DIR / run_dir) if args.run and run_dir.parent == Path(".") else (ROOT / run_dir)
+    run_dir = resolve_run_dir(args.run, args.resume)
     if not run_dir.exists():
         raise SystemExit(f"run 目录不存在: {run_dir}")
     state = load_state(run_dir)
@@ -2383,6 +2429,8 @@ def wizard(args: argparse.Namespace) -> None:
             seed=42,
             eval_size=120,
             save_steps=160,
+            load_in_4bit=True,
+            gradient_checkpointing=False,
         )
     )
     command_convert_adapter(argparse.Namespace(run=str(run_dir), resume="", base=args.base or "", llama_cpp="", adapter="", out=""))
@@ -2532,6 +2580,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--contact-sample-rate", type=float, default=1.0)
     p.add_argument("--contact-max-messages", type=int, default=0)
     p.add_argument("--contact-sample-seed", type=int, default=20260528)
+    p.add_argument("--contact-sample-mode", choices=["random-window", "recent", "head"], default="random-window")
     p.set_defaults(func=command_data_build)
     p = data_sub.add_parser("report")
     p.add_argument("--data", required=True)
@@ -2558,6 +2607,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--eval-size", type=int, default=120)
     p.add_argument("--save-steps", type=int, default=160)
+    p.add_argument("--load-in-4bit", action=argparse.BooleanOptionalAction, default=True)
+    p.add_argument("--gradient-checkpointing", action=argparse.BooleanOptionalAction, default=False)
     p.set_defaults(func=command_train_lora)
     p = train_sub.add_parser("sticker-selector")
     p.add_argument("--run")

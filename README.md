@@ -213,6 +213,8 @@ me-distilled ollama test --model me-distilled
 
 `train lora` 只训练主聊天模型，不会自动训练 sticker selector。表情包选择器是独立的小模型，使用 `data build` 生成的 `data/sticker_selector_train.jsonl`，默认采用 TF-IDF 特征和带类别权重的 Logistic Regression，适合在 CPU 上快速训练。
 
+`train lora` 默认使用 4bit QLoRA 加载基座，适合显存较小的 NVIDIA CUDA 环境；如需关闭可加 `--no-load-in-4bit`。同一个 run 建议始终使用同一种写法，例如 `--run my-run` 或 `--resume runs/my-run`，CLI 会把 `my-run` 统一解析到 `runs/my-run`，后续训练、转换和 Ollama 创建会复用同一个 run 里的状态路径。
+
 训练完成后可以清理中间文件：
 
 ```bash

@@ -59,9 +59,38 @@ STICKER_DESC_LIMIT_OVERRIDES = {
 }
 ENABLE_STICKER = os.environ.get("ME_DISTILLED_ENABLE_STICKER", "1") != "0"
 ENABLE_SYNTHETIC = os.environ.get("ME_DISTILLED_ENABLE_SYNTHETIC", "1") != "0"
-CONTACT_SAMPLE_RATE = float(os.environ.get("ME_DISTILLED_CONTACT_SAMPLE_RATE", "1") or "1")
-CONTACT_MAX_MESSAGES = int(os.environ.get("ME_DISTILLED_CONTACT_MAX_MESSAGES", "0") or "0")
-CONTACT_SAMPLE_SEED = int(os.environ.get("ME_DISTILLED_CONTACT_SAMPLE_SEED", str(SEED)) or str(SEED))
+
+
+def env_float(name: str, default: float) -> float:
+    raw = os.environ.get(name, "")
+    if not raw:
+        return default
+    try:
+        return float(raw)
+    except ValueError as exc:
+        raise ValueError(f"{name} must be a float, got {raw!r}") from exc
+
+
+def env_int(name: str, default: int) -> int:
+    raw = os.environ.get(name, "")
+    if not raw:
+        return default
+    try:
+        return int(raw)
+    except ValueError as exc:
+        raise ValueError(f"{name} must be an integer, got {raw!r}") from exc
+
+
+CONTACT_SAMPLE_RATE = env_float("ME_DISTILLED_CONTACT_SAMPLE_RATE", 1.0)
+CONTACT_MAX_MESSAGES = env_int("ME_DISTILLED_CONTACT_MAX_MESSAGES", 0)
+CONTACT_SAMPLE_SEED = env_int("ME_DISTILLED_CONTACT_SAMPLE_SEED", SEED)
+CONTACT_SAMPLE_MODE = os.environ.get("ME_DISTILLED_CONTACT_SAMPLE_MODE", "random-window").strip().lower()
+if not 0 < CONTACT_SAMPLE_RATE <= 1:
+    raise ValueError("ME_DISTILLED_CONTACT_SAMPLE_RATE must be in (0, 1].")
+if CONTACT_MAX_MESSAGES < 0:
+    raise ValueError("ME_DISTILLED_CONTACT_MAX_MESSAGES must be >= 0.")
+if CONTACT_SAMPLE_MODE not in {"random-window", "recent", "head"}:
+    raise ValueError("ME_DISTILLED_CONTACT_SAMPLE_MODE must be one of: random-window, recent, head.")
 
 SENSITIVE_TERMS = [*CONTACT_TARGETS]
 if os.environ.get("ME_DISTILLED_SENSITIVE_JSON"):
@@ -534,7 +563,7 @@ def load_messages(wxid: str) -> list[dict]:
     return all_rows
 
 
-def sample_contact_messages(messages: list[dict], target: str, wxid: str) -> tuple[list[dict], dict[str, int | float]]:
+def sample_contact_messages(messages: list[dict], target: str, wxid: str) -> tuple[list[dict], dict[str, int | float | str]]:
     total = len(messages)
     if total <= 0:
         return messages, {
@@ -542,10 +571,13 @@ def sample_contact_messages(messages: list[dict], target: str, wxid: str) -> tup
             "sampled_messages": 0,
             "sample_rate": CONTACT_SAMPLE_RATE,
             "max_messages": CONTACT_MAX_MESSAGES,
+            "sample_mode": CONTACT_SAMPLE_MODE,
+            "sample_start": 0,
+            "sample_end": 0,
         }
 
     keep_count = total
-    if 0 < CONTACT_SAMPLE_RATE < 1:
+    if CONTACT_SAMPLE_RATE < 1:
         keep_count = max(1, int(round(total * CONTACT_SAMPLE_RATE)))
     if CONTACT_MAX_MESSAGES > 0:
         keep_count = min(keep_count, CONTACT_MAX_MESSAGES)
@@ -556,17 +588,29 @@ def sample_contact_messages(messages: list[dict], target: str, wxid: str) -> tup
             "sampled_messages": total,
             "sample_rate": CONTACT_SAMPLE_RATE,
             "max_messages": CONTACT_MAX_MESSAGES,
+            "sample_mode": CONTACT_SAMPLE_MODE,
+            "sample_start": 0,
+            "sample_end": total,
         }
 
-    seed_material = f"{CONTACT_SAMPLE_SEED}\n{target}\n{wxid}".encode("utf-8", errors="ignore")
-    stable_seed = int.from_bytes(hashlib.sha256(seed_material).digest()[:8], "big")
-    rng = random.Random(stable_seed)
-    start = rng.randint(0, total - keep_count)
+    if CONTACT_SAMPLE_MODE == "recent":
+        start = total - keep_count
+    elif CONTACT_SAMPLE_MODE == "head":
+        start = 0
+    else:
+        seed_material = f"{CONTACT_SAMPLE_SEED}\n{target}\n{wxid}".encode("utf-8", errors="ignore")
+        stable_seed = int.from_bytes(hashlib.sha256(seed_material).digest()[:8], "big")
+        rng = random.Random(stable_seed)
+        start = rng.randint(0, total - keep_count)
+    end = start + keep_count
     return messages[start : start + keep_count], {
         "original_messages": total,
         "sampled_messages": keep_count,
         "sample_rate": CONTACT_SAMPLE_RATE,
         "max_messages": CONTACT_MAX_MESSAGES,
+        "sample_mode": CONTACT_SAMPLE_MODE,
+        "sample_start": start,
+        "sample_end": end,
     }
 
 
@@ -892,6 +936,8 @@ def build_real_rows() -> tuple[list[dict], list[dict], list[str]]:
     seen_pairs: set[tuple[str, str]] = set()
     reject_counts: Counter[str] = Counter()
     multiturn_reject_counts: Counter[str] = Counter()
+    contact_sample_original = 0
+    contact_sample_kept = 0
 
     for target, contact in matched.items():
         if contact is None:
@@ -901,8 +947,11 @@ def build_real_rows() -> tuple[list[dict], list[dict], list[str]]:
         display = next((name for name in contact["names"] if name), target)
         original_messages = load_messages(wxid)
         messages, sample_stats = sample_contact_messages(original_messages, target, wxid)
+        contact_sample_original += int(sample_stats["original_messages"])
+        contact_sample_kept += int(sample_stats["sampled_messages"])
         match_report.append(
             f"{target}\t{wxid}\t{display}\tmessages={sample_stats['sampled_messages']}/{sample_stats['original_messages']}"
+            f"\tmode={sample_stats['sample_mode']}\twindow={sample_stats['sample_start']}:{sample_stats['sample_end']}"
         )
 
         raw_path = RAW_OUT / f"{target}.txt"
@@ -933,6 +982,12 @@ def build_real_rows() -> tuple[list[dict], list[dict], list[str]]:
             seen_pairs.add(pair)
             rows.append(make_row(user, assistant, target))
 
+    match_report.append("")
+    match_report.append("contact_sampling:")
+    match_report.append(f"  mode: {CONTACT_SAMPLE_MODE}")
+    match_report.append(f"  original_messages: {contact_sample_original}")
+    match_report.append(f"  sampled_messages: {contact_sample_kept}")
+    match_report.append(f"  kept_ratio: {contact_sample_kept / contact_sample_original:.4f}" if contact_sample_original else "  kept_ratio: 0.0000")
     match_report.append("")
     match_report.append("real_reject_counts:")
     match_report.extend(f"  {key}: {value}" for key, value in sorted(reject_counts.items()))
@@ -1169,6 +1224,7 @@ def main() -> None:
         f"contact_sample_rate: {CONTACT_SAMPLE_RATE}",
         f"contact_max_messages: {CONTACT_MAX_MESSAGES}",
         f"contact_sample_seed: {CONTACT_SAMPLE_SEED}",
+        f"contact_sample_mode: {CONTACT_SAMPLE_MODE}",
         "",
         "matched_contacts:",
         *match_report,
