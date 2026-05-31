@@ -117,6 +117,45 @@ def split_rows(rows: list[dict], seed: int, eval_size: int) -> tuple[list[dict],
     return rows[eval_size:], rows[:eval_size]
 
 
+def resolve_model_dir(path: Path) -> Path:
+    path = path.expanduser().resolve()
+    if not path.exists():
+        raise FileNotFoundError(f"model_dir does not exist: {path}")
+    if path.is_file():
+        raise NotADirectoryError(f"model_dir must be a directory, got file: {path}")
+
+    tokenizer_files = ("tokenizer_config.json", "tokenizer.json", "tokenizer.model", "vocab.json", "merges.txt")
+
+    def looks_like_model_dir(candidate: Path) -> bool:
+        return (candidate / "config.json").exists() and any((candidate / name).exists() for name in tokenizer_files)
+
+    if looks_like_model_dir(path):
+        return path
+
+    common_children = [
+        "model",
+        "models",
+        "Qwen2.5-7B-Instruct",
+        "qwen2.5-7b-instruct",
+        "snapshots",
+    ]
+    for child in common_children:
+        candidate = path / child
+        if candidate.exists() and looks_like_model_dir(candidate):
+            return candidate
+
+    matches = [candidate for candidate in path.rglob("config.json") if looks_like_model_dir(candidate.parent)]
+    if matches:
+        matches.sort(key=lambda item: (len(item.parent.relative_to(path).parts), str(item.parent).lower()))
+        return matches[0].parent
+
+    raise FileNotFoundError(
+        f"Could not find a Hugging Face/Transformers model directory under {path}. "
+        "Expected config.json plus tokenizer files. If this is a ModelScope cache root, "
+        "pass the nested snapshot/model directory or update the download path."
+    )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--model_dir", required=True)
@@ -141,7 +180,11 @@ def main() -> None:
     random.seed(args.seed)
     os.makedirs(args.output_dir, exist_ok=True)
 
-    tokenizer = AutoTokenizer.from_pretrained(args.model_dir, trust_remote_code=True, use_fast=True)
+    model_dir = resolve_model_dir(Path(args.model_dir))
+    if str(model_dir) != str(Path(args.model_dir).expanduser().resolve()):
+        print(f"resolved_model_dir: {model_dir}")
+
+    tokenizer = AutoTokenizer.from_pretrained(str(model_dir), trust_remote_code=True, use_fast=True)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
@@ -149,7 +192,7 @@ def main() -> None:
     train_rows, eval_rows = split_rows(rows, args.seed, args.eval_size)
 
     model = AutoModelForCausalLM.from_pretrained(
-        args.model_dir,
+        str(model_dir),
         torch_dtype=torch.float16,
         device_map="auto",
         trust_remote_code=True,
@@ -244,6 +287,7 @@ def main() -> None:
             {
                 "data": args.data,
                 "model_dir": args.model_dir,
+                "resolved_model_dir": str(model_dir),
                 "train_rows": len(train_rows),
                 "eval_rows": len(eval_rows),
                 "epochs": args.epochs,

@@ -59,6 +59,8 @@ This skill is an execution workflow for agents. Do the work yourself with the re
 6. Train and convert.
    - Install training deps only when training is requested: `me-distilled setup deps --kind train`.
    - Ensure models/tools with `me-distilled setup models --all` and `me-distilled setup tools --all`.
+   - If the user wants sticker selection outside the main model, run `me-distilled train sticker-selector --run <run>` after `data build`.
+   - Do not assume `me-distilled train lora` trains the sticker selector; it only trains the main chat LoRA.
    - Run `me-distilled train lora --run <run>`.
    - Run `me-distilled convert adapter --run <run>`.
    - If conversion fails, rerun `me-distilled setup tools --llama-cpp` and retry conversion.

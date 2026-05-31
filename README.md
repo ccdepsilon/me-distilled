@@ -24,6 +24,7 @@ Me-Distilled 是一个本地优先的命令行工具，用于把已授权的微�
 - 构建适合聊天风格微调的监督训练数据。
 - 支持文本、emoji 标签、Unicode emoji 和实验性的 sticker 标签数据模式。
 - 本地训练 LoRA adapter。
+- 可单独训练 sticker selector 小模型，用于根据聊天上下文/回复文本预测是否发送表情包以及发送哪一个。
 - 将 adapter 转为 GGUF，并创建 Ollama 模型。
 - 可选准备一个本地 Web 聊天前端。
 
@@ -204,10 +205,13 @@ me-distilled data build \
 
 ```bash
 me-distilled train lora --run my-run
+me-distilled train sticker-selector --run my-run
 me-distilled convert adapter --run my-run
 me-distilled ollama create --run my-run --name me-distilled
 me-distilled ollama test --model me-distilled
 ```
+
+`train lora` 只训练主聊天模型，不会自动训练 sticker selector。表情包选择器是独立的小模型，使用 `data build` 生成的 `data/sticker_selector_train.jsonl`，默认采用 TF-IDF 特征和带类别权重的 Logistic Regression，适合在 CPU 上快速训练。
 
 训练完成后可以清理中间文件：
 

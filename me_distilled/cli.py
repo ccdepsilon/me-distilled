@@ -338,6 +338,14 @@ def module_exists(name: str) -> bool:
     return importlib.util.find_spec(name) is not None
 
 
+def module_importable(name: str) -> bool:
+    try:
+        __import__(name)
+        return True
+    except Exception:
+        return False
+
+
 def is_windows() -> bool:
     return sys.platform.startswith("win")
 
@@ -890,6 +898,9 @@ def env_for_run(
     sticker: bool = True,
     synthetic: bool = False,
     identity_answers: list[str] | None = None,
+    contact_sample_rate: float = 1.0,
+    contact_max_messages: int = 0,
+    contact_sample_seed: int = 20260528,
 ) -> dict[str, str]:
     emotion_out = run_dir / "stickers" / "emotion_export"
     sensitive_terms = read_lines(run_dir / "sensitive_words.txt")
@@ -913,6 +924,9 @@ def env_for_run(
         "ME_DISTILLED_ENABLE_SYNTHETIC": "1" if synthetic else "0",
         "ME_DISTILLED_SENSITIVE_JSON": json.dumps(sensitive_terms, ensure_ascii=False),
         "ME_DISTILLED_IDENTITY_ANSWERS_JSON": json.dumps(identity_answers or [], ensure_ascii=False),
+        "ME_DISTILLED_CONTACT_SAMPLE_RATE": str(contact_sample_rate),
+        "ME_DISTILLED_CONTACT_MAX_MESSAGES": str(contact_max_messages),
+        "ME_DISTILLED_CONTACT_SAMPLE_SEED": str(contact_sample_seed),
     }
 
 
@@ -1784,6 +1798,9 @@ def command_data_build(args: argparse.Namespace) -> None:
         sticker=not args.no_sticker,
         synthetic=args.synthetic,
         identity_answers=identity_answers,
+        contact_sample_rate=getattr(args, "contact_sample_rate", 1.0),
+        contact_max_messages=getattr(args, "contact_max_messages", 0),
+        contact_sample_seed=getattr(args, "contact_sample_seed", 20260528),
     )
     run_command([sys.executable, "-X", "utf8", "tools/build_sticker_training_data.py"], env=env, log=run_dir / "logs" / "data-build.log")
     final_data = run_dir / "data" / "qa_with_stickers_train.jsonl"
@@ -1803,6 +1820,9 @@ def command_data_build(args: argparse.Namespace) -> None:
         final_data = run_dir / "data" / "qa_text_emoji_tag_train.jsonl"
     state.paths["train_data"] = str(final_data)
     state.config["data_mode"] = args.mode
+    state.config["contact_sample_rate"] = getattr(args, "contact_sample_rate", 1.0)
+    state.config["contact_max_messages"] = getattr(args, "contact_max_messages", 0)
+    state.config["contact_sample_seed"] = getattr(args, "contact_sample_seed", 20260528)
     mark(run_dir, state, "data_built")
     out(f"训练数据: {final_data}", "green")
     command_data_report(argparse.Namespace(data=str(final_data), out=str(run_dir / "data" / "report.summary.txt"), sticker_map=str(run_dir / "stickers" / "sticker-map.json")))
@@ -1910,6 +1930,50 @@ def command_train_lora(args: argparse.Namespace) -> None:
     state.paths["train_data"] = str(data)
     state.paths["lora"] = str(out_dir / "final_adapter")
     mark(run_dir, state, "trained")
+
+
+def command_train_sticker_selector(args: argparse.Namespace) -> None:
+    run_dir, state = ensure_run(args.run, args.resume)
+    data = Path(args.data) if args.data else run_dir / "data" / "sticker_selector_train.jsonl"
+    labels = Path(args.labels) if args.labels else run_dir / "data" / "sticker_selector_labels.json"
+    out_dir = Path(args.output) if args.output else run_dir / "model" / "sticker_selector"
+    if not data.exists():
+        out(f"未找到 sticker selector 数据: {data}", "red")
+        out("请先运行 data build，并确保没有使用 --no-sticker。", "yellow")
+        raise SystemExit(1)
+    if not module_importable("sklearn") or not module_importable("joblib"):
+        out("缺少 sticker selector 训练依赖。请先运行：me-distilled setup deps --kind train", "red")
+        raise SystemExit(1)
+    selector_log = run_dir / "logs" / "sticker-selector-train.log"
+    cmd = [
+        sys.executable,
+        "-X",
+        "utf8",
+        "tools/train_sticker_selector.py",
+        "--data",
+        str(data),
+        "--labels",
+        str(labels),
+        "--out-dir",
+        str(out_dir),
+        "--test-size",
+        str(args.test_size),
+        "--seed",
+        str(args.seed),
+        "--max-iter",
+        str(args.max_iter),
+        "--c",
+        str(args.c),
+        "--threshold",
+        str(args.threshold),
+    ]
+    run_command(cmd, log=selector_log)
+    state.paths["sticker_selector_data"] = str(data)
+    state.paths["sticker_selector_model"] = str(out_dir / "sticker_selector.joblib")
+    state.paths["sticker_selector_config"] = str(out_dir / "selector_config.json")
+    state.config["sticker_selector_threshold"] = args.threshold
+    mark(run_dir, state, "sticker_selector_trained")
+    out(f"sticker selector: {out_dir / 'sticker_selector.joblib'}", "green")
 
 
 def command_convert_adapter(args: argparse.Namespace) -> None:
@@ -2253,6 +2317,21 @@ def wizard(args: argparse.Namespace) -> None:
             identity_answer=identity_answers,
         )
     )
+    if use_stickers and prompt_yes("是否训练 sticker selector 小模型？", False, auto_yes=args.yes):
+        command_train_sticker_selector(
+            argparse.Namespace(
+                run=str(run_dir),
+                resume="",
+                data="",
+                labels="",
+                output="",
+                test_size=0.2,
+                threshold=0.45,
+                max_iter=1000,
+                c=2.0,
+                seed=42,
+            )
+        )
 
     if prompt_yes("是否自动下载/检查训练基座和 GGUF 基座？", True, auto_yes=args.yes):
         command_setup_models(argparse.Namespace(all=True, hf=False, gguf=False, base=args.base, base_gguf=args.base_gguf))
@@ -2423,6 +2502,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--identity-answer", action="append", default=[])
     p.add_argument("--synthetic", action="store_true")
     p.add_argument("--no-sticker", action="store_true")
+    p.add_argument("--contact-sample-rate", type=float, default=1.0)
+    p.add_argument("--contact-max-messages", type=int, default=0)
+    p.add_argument("--contact-sample-seed", type=int, default=20260528)
     p.set_defaults(func=command_data_build)
     p = data_sub.add_parser("report")
     p.add_argument("--data", required=True)
@@ -2450,6 +2532,18 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--eval-size", type=int, default=120)
     p.add_argument("--save-steps", type=int, default=160)
     p.set_defaults(func=command_train_lora)
+    p = train_sub.add_parser("sticker-selector")
+    p.add_argument("--run")
+    p.add_argument("--resume")
+    p.add_argument("--data", default="")
+    p.add_argument("--labels", default="")
+    p.add_argument("--output", default="")
+    p.add_argument("--test-size", type=float, default=0.2)
+    p.add_argument("--threshold", type=float, default=0.45)
+    p.add_argument("--max-iter", type=int, default=1000)
+    p.add_argument("--c", type=float, default=2.0)
+    p.add_argument("--seed", type=int, default=42)
+    p.set_defaults(func=command_train_sticker_selector)
 
     convert = sub.add_parser("convert", help="转换 adapter 为 GGUF")
     convert_sub = convert.add_subparsers(dest="convert_command", required=True)

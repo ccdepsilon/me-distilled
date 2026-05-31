@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import csv
 import datetime as dt
+import hashlib
 import html
 import json
 import os
@@ -58,6 +59,9 @@ STICKER_DESC_LIMIT_OVERRIDES = {
 }
 ENABLE_STICKER = os.environ.get("ME_DISTILLED_ENABLE_STICKER", "1") != "0"
 ENABLE_SYNTHETIC = os.environ.get("ME_DISTILLED_ENABLE_SYNTHETIC", "1") != "0"
+CONTACT_SAMPLE_RATE = float(os.environ.get("ME_DISTILLED_CONTACT_SAMPLE_RATE", "1") or "1")
+CONTACT_MAX_MESSAGES = int(os.environ.get("ME_DISTILLED_CONTACT_MAX_MESSAGES", "0") or "0")
+CONTACT_SAMPLE_SEED = int(os.environ.get("ME_DISTILLED_CONTACT_SAMPLE_SEED", str(SEED)) or str(SEED))
 
 SENSITIVE_TERMS = [*CONTACT_TARGETS]
 if os.environ.get("ME_DISTILLED_SENSITIVE_JSON"):
@@ -530,6 +534,42 @@ def load_messages(wxid: str) -> list[dict]:
     return all_rows
 
 
+def sample_contact_messages(messages: list[dict], target: str, wxid: str) -> tuple[list[dict], dict[str, int | float]]:
+    total = len(messages)
+    if total <= 0:
+        return messages, {
+            "original_messages": 0,
+            "sampled_messages": 0,
+            "sample_rate": CONTACT_SAMPLE_RATE,
+            "max_messages": CONTACT_MAX_MESSAGES,
+        }
+
+    keep_count = total
+    if 0 < CONTACT_SAMPLE_RATE < 1:
+        keep_count = max(1, int(round(total * CONTACT_SAMPLE_RATE)))
+    if CONTACT_MAX_MESSAGES > 0:
+        keep_count = min(keep_count, CONTACT_MAX_MESSAGES)
+
+    if keep_count >= total:
+        return messages, {
+            "original_messages": total,
+            "sampled_messages": total,
+            "sample_rate": CONTACT_SAMPLE_RATE,
+            "max_messages": CONTACT_MAX_MESSAGES,
+        }
+
+    seed_material = f"{CONTACT_SAMPLE_SEED}\n{target}\n{wxid}".encode("utf-8", errors="ignore")
+    stable_seed = int.from_bytes(hashlib.sha256(seed_material).digest()[:8], "big")
+    rng = random.Random(stable_seed)
+    start = rng.randint(0, total - keep_count)
+    return messages[start : start + keep_count], {
+        "original_messages": total,
+        "sampled_messages": keep_count,
+        "sample_rate": CONTACT_SAMPLE_RATE,
+        "max_messages": CONTACT_MAX_MESSAGES,
+    }
+
+
 def parse_desc(desc: str) -> str:
     if not desc:
         return ""
@@ -859,8 +899,11 @@ def build_real_rows() -> tuple[list[dict], list[dict], list[str]]:
             continue
         wxid = contact["wxid"]
         display = next((name for name in contact["names"] if name), target)
-        messages = load_messages(wxid)
-        match_report.append(f"{target}\t{wxid}\t{display}\tmessages={len(messages)}")
+        original_messages = load_messages(wxid)
+        messages, sample_stats = sample_contact_messages(original_messages, target, wxid)
+        match_report.append(
+            f"{target}\t{wxid}\t{display}\tmessages={sample_stats['sampled_messages']}/{sample_stats['original_messages']}"
+        )
 
         raw_path = RAW_OUT / f"{target}.txt"
         with raw_path.open("w", encoding="utf-8", newline="\n") as f:
@@ -1123,6 +1166,9 @@ def main() -> None:
         f"train_only_output: {OUTPUT_TRAIN}",
         f"raw_export_dir: {RAW_OUT}",
         f"manual_sticker_mapping: {MANUAL_STICKER_MAPPING}",
+        f"contact_sample_rate: {CONTACT_SAMPLE_RATE}",
+        f"contact_max_messages: {CONTACT_MAX_MESSAGES}",
+        f"contact_sample_seed: {CONTACT_SAMPLE_SEED}",
         "",
         "matched_contacts:",
         *match_report,
